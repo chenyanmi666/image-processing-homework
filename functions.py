@@ -275,6 +275,10 @@ def _hw1_apply_vibrance(sat, amount):
       - 灰色的 S 本身为 0，输出仍为 0（不会被染色）。
 
     amount ∈ [-1, 1]，0 为恒等；amount < 0 表示降低自然饱和度。
+
+    诚实声明：该增益衰减模型是本作业**自行设计**的近似算法（借鉴"越不鲜艳提升越多"的
+    定性行为），**没有**使用真实 Photoshop 输出数据做任何拟合，也未与 PS 的实际输出比对，
+    因此只能说"PS 风格"，不能说"复刻 Photoshop"或"与 PS 一致"。
     """
     s = np.clip(np.asarray(sat, dtype=np.float64), 0.0, 1.0)
     gain = 1.0 + float(np.clip(amount, -1.0, 1.0)) * (1.0 - s) ** 2
@@ -287,9 +291,16 @@ def _hw1_apply_vibrance(sat, amount):
 #   - 亮度是非线性的：中灰附近变化大、黑白端点基本不动（不直接裁剪高光/阴影）。
 # 本实现用 tanh 构造 S 曲线、用 gamma 构造亮度，端点与中灰的锚定可解析验证。
 #
-# 诚实声明：本机没有 Photoshop，**未做**与 PS 输出的逐像素比对，
-# 因此该功能标注为"PS 风格"而不是"PS 复刻"；参数标定实验见
-# _hw1_ps_fit_contrast_a，行为验证见 tests/test_hw1.py 的 TestPsStyleTone。
+# 诚实声明（必须分清三种不同的东西）：
+#   1) "亮度/对比度 (PS风格)"：本作业**自行设计**的模拟（tanh S 曲线 + gamma 亮度），
+#      数学性质可解析验证，但**没有**用真实 Photoshop 输出数据做参数拟合；
+#   2) "自然饱和度 (PS vibrance)"：本作业**自行设计**的近似模型
+#      gain(S)=1+amount*(1-S)^2，同样**没有**用真实 Photoshop 输出数据拟合；
+#   3) "用真实 Photoshop 输出数据拟合"这件事本作业**未做**（本机未安装 Photoshop，
+#      也没有 PS 参考输出），因此任何地方都不得写成"复刻 PS""拟合 PS""与 PS 一致"。
+# 参数标定实验（_hw1_ps_fit_contrast_a）度量的是"本实现的 S 曲线 vs 同斜率线性斜坡"，
+# 属于本实现内部的实验，不是与 Photoshop 的比对；行为验证见 tests/test_hw1.py 的
+# TestPsStyleTone 与 TestVibrance。
 # ---------------------------------------------------------------------------
 _HW1_PS_CONTRAST_A_MAX = 4.0
 
@@ -383,6 +394,33 @@ def _hw1_abs_diff(a_u8, b_u8):
     return np.abs(a_u8.astype(np.int16) - b_u8.astype(np.int16))
 
 
+# 饱和度低于该值的像素色相在数值上不稳定（灰/近灰/极暗），统计时单列口径。
+_HW1_HUE_MEANINGFUL_S_MIN = 0.10
+
+
+def _hw1_hue_angle_delta(h1_deg, h2_deg):
+    """色相 H 在圆周上的最短角距离（度，取值范围 [0, 180]）。
+
+    色相是**角度量**（周期 360°），直接做 abs(H1 - H2) 是错的：
+    359° 与 1° 只差 2°，不是 358°。这里按最短圆弧计算：
+        d = |H1 - H2| mod 360，再取 min(d, 360 - d)。
+    """
+    delta = np.abs(np.mod(np.asarray(h1_deg, dtype=np.float64), 360.0)
+                   - np.mod(np.asarray(h2_deg, dtype=np.float64), 360.0))
+    return np.minimum(delta, 360.0 - delta)
+
+
+def _hw1_difference_vis(a_u8, b_u8, gain=5):
+    """差异可视化：|a - b| × gain 后饱和到 [0, 255]。
+
+    放大在 int32 里做，避免整数回绕：gain=5 时中间值最大 255×5=1275，已超出
+    uint8；若直接在 uint8 上相乘会按 256 取模（255×5→251、60×5→44），
+    得到与真实差异无关的灰度。
+    """
+    scaled = _hw1_abs_diff(a_u8, b_u8).astype(np.int32) * int(gain)
+    return np.clip(scaled, 0, 255).astype(np.uint8)
+
+
 def _hw1_error_stats(a_u8, b_u8):
     """两张 uint8 图的误差统计：MAE、最大绝对误差、PSNR(dB)、逐通道 MAE。"""
     diff = _hw1_abs_diff(a_u8, b_u8).astype(np.float64)
@@ -418,8 +456,11 @@ def function_hw1_compare(input_image, h_slider, s_slider, l_slider):
 
     同一组滑杆参数分别走两条路径，返回 (对比图, 统计文本)：
       对比图：原图 | 手写(课件定义) | 官方 cv2 HLS | 差异 ×5 放大
+              （差异面板按 |Δ|×5 放大，放大在 int32 内完成后再裁剪到 255，不会发生 uint8 回绕）
       统计文本：最终 RGB 输出层面的 MAE / 最大误差 / PSNR / 逐通道 MAE；
-                换算到同一测量空间（cv2 HLS）后的 H/S/L 偏差；
+                换算到同一测量空间（cv2 HLS）后的 H/S/L 偏差
+                （H 是角度量，按**圆周最短弧**统计，并单列"双方饱和度均 >= 0.10
+                 的像素"这一可解释口径，以避开灰/近灰像素色相不稳定的干扰）；
                 以及两条路径各自"原图 -> 空间 -> 原图"的量化往返误差。
 
     目的是把**数学模型差异**（两套 L/S 定义不同）与**8 位量化误差**分开报告，
@@ -439,11 +480,20 @@ def function_hw1_compare(input_image, h_slider, s_slider, l_slider):
 
     m_hls = _hw1_rgb_to_hls_opencv(manual.astype(np.float64) / 255.0)
     o_hls = _hw1_rgb_to_hls_opencv(official.astype(np.float64) / 255.0)
-    h_diff = float(np.abs(m_hls[:, :, 0] - o_hls[:, :, 0]).mean())
+    # 色相是角度量：必须按圆周最短弧统计（359° 与 1° 相差 2°，不是 358°）。
+    h_delta = _hw1_hue_angle_delta(m_hls[:, :, 0], o_hls[:, :, 0])
+    h_diff = float(h_delta.mean())
+    h_diff_max = float(h_delta.max())
+    # 灰/近灰像素（S -> 0）的色相在数值上不稳定：8 位量化或极小的 RGB 差异都可能让 H 大幅跳动，
+    # 因此额外统计"双方饱和度都不低于 _HW1_HUE_MEANINGFUL_S_MIN"的像素作为可解释口径。
+    sat_meaningful = np.minimum(m_hls[:, :, 1], o_hls[:, :, 1]) >= _HW1_HUE_MEANINGFUL_S_MIN
+    h_diff_colored = (float(h_delta[sat_meaningful].mean())
+                      if bool(sat_meaningful.any()) else float("nan"))
+    colored_share = float(sat_meaningful.mean()) * 100.0
     s_diff = float(np.abs(m_hls[:, :, 1] - o_hls[:, :, 1]).mean())
     l_diff = float(np.abs(m_hls[:, :, 2] - o_hls[:, :, 2]).mean())
 
-    diff_vis = np.clip(_hw1_abs_diff(manual, official) * 5, 0, 255).astype(np.uint8)
+    diff_vis = _hw1_difference_vis(manual, official)
     figure = _hw1_side_by_side([img_u8, manual, official, diff_vis])
 
     psnr_text = ("inf（两路径完全一致）" if stats["psnr"] == float("inf")
@@ -462,7 +512,10 @@ def function_hw1_compare(input_image, h_slider, s_slider, l_slider):
         "| 最大绝对误差 | %d / 255 |" % int(round(stats["max"])),
         "| PSNR | %s |" % psnr_text,
         "| 逐通道 MAE (R/G/B) | %.3f / %.3f / %.3f |" % tuple(stats["channel_mae"][:3]),
-        "| 同一空间(cv2 HLS)的 H 偏差 | %.3f 度 |" % h_diff,
+        "| 同一空间(cv2 HLS)的 H 平均角距离（最短圆弧，<=180°） | %.3f 度 |" % h_diff,
+        "| 同一空间(cv2 HLS)的 H 最大角距离 | %.3f 度 |" % h_diff_max,
+        "| 其中双方饱和度均 >= 0.10 的像素：H 平均角距离 | %.3f 度（占 %.1f%% 像素）"
+        % (h_diff_colored, colored_share),
         "| 同一空间(cv2 HLS)的 S / L 偏差 | %.4f / %.4f |" % (s_diff, l_diff),
         "| 手写路径量化往返 MAE / 最大误差 | %.3f / %d |"
         % (rt_manual["mae"], int(round(rt_manual["max"]))),
@@ -473,6 +526,14 @@ def function_hw1_compare(input_image, h_slider, s_slider, l_slider):
         "OpenCV 的 HLS 定义 L=(max+min)/2、S=(max-min)/(max+min)。两者的 L/S 数值本来就不可直接互比，"
         "所以这里比较的是**最终 RGB 输出**（用户真正看到的结果）与**换算到同一空间后的 H/S/L**；"
         "量化往返误差单独列出，用于把 8 位量化误差与数学模型差异分开。",
+        "",
+        "**色相按圆周统计**：H 是角度量（周期 360°），表中 H 偏差取**最短圆弧角距离**"
+        "（359° 与 1° 记作 2°，而不是 358°；上限 180°），直接相减 abs(H1-H2) 是错误口径。",
+        "",
+        "**低饱和度像素的解释局限**：当饱和度 S 趋近 0（灰、近灰、极暗像素）时色相在数值上"
+        "不稳定，官方路径的 8 位量化或极小的 RGB 差异都可能让 H 在大范围内跳动。因此表中另给"
+        "出双方饱和度均 >= 0.10 的像素这一口径；它减少但不能完全消除该局限。H 偏差只能在"
+        "两路输出 RGB 换算回同一空间后比较，不能用于判定哪一方实现更准确。",
     ]
     return figure, "\n".join(lines)
 

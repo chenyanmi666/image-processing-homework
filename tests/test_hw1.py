@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 import time
 import types
@@ -743,6 +744,81 @@ class TestCompareExperiment(unittest.TestCase):
         joined = F._hw1_side_by_side([a, b], gap=2)
         self.assertEqual(joined.shape, (6, 4 + 2 + 4, 3))
         self.assertTrue(np.all(joined[4:, 0:4] == 255), "较矮的图底部应补白")
+
+    def test_hue_angle_delta_is_circular(self):
+        """色相差必须是圆周最短弧：359° 与 1° 相差 2°，不是 358°。"""
+        self.assertAlmostEqual(float(F._hw1_hue_angle_delta(359.0, 1.0)), 2.0, places=9)
+        self.assertAlmostEqual(float(F._hw1_hue_angle_delta(1.0, 359.0)), 2.0, places=9)
+        self.assertAlmostEqual(float(F._hw1_hue_angle_delta(0.0, 359.0)), 1.0, places=9)
+        self.assertAlmostEqual(float(F._hw1_hue_angle_delta(0.0, 180.0)), 180.0, places=9)
+        self.assertAlmostEqual(float(F._hw1_hue_angle_delta(350.0, 10.0)), 20.0, places=9)
+        self.assertAlmostEqual(float(F._hw1_hue_angle_delta(90.0, 270.0)), 180.0, places=9)
+        # 跨 0/360 的数组形式必须逐像素取最短弧
+        delta = F._hw1_hue_angle_delta(np.array([359.0, 0.0, 10.0]),
+                                       np.array([1.0, 180.0, 350.0]))
+        self.assertTrue(np.allclose(delta, [2.0, 180.0, 20.0]))
+
+    def test_hue_angle_delta_is_symmetric_and_bounded(self):
+        rng = np.random.default_rng(20241012)
+        a = rng.uniform(0.0, 360.0, 256)
+        b = rng.uniform(0.0, 360.0, 256)
+        delta = F._hw1_hue_angle_delta(a, b)
+        self.assertTrue(np.allclose(delta, F._hw1_hue_angle_delta(b, a)), "角距离必须对称")
+        self.assertGreaterEqual(float(delta.min()), 0.0)
+        self.assertLessEqual(float(delta.max()), 180.0, "最短弧角距离不可能超过 180°")
+        naive = np.abs(np.mod(a, 360.0) - np.mod(b, 360.0))
+        self.assertTrue(np.allclose(delta, np.minimum(naive, 360.0 - naive)))
+        # 直接相减的口径在跨界时会高估，最短弧必须 <= 直接相减
+        self.assertLessEqual(float(delta.mean()), float(naive.mean()) + 1e-9)
+
+    def test_compare_report_hue_distance_is_circular(self):
+        """集成检查：报告中 H 一行的数值必须等于按最短弧重算的结果。"""
+        require_cv2(self)
+        img = gradient_image(24, 32)
+        h_slider, s_slider, l_slider = 0.0, 0.5, 0.0
+        _, text = F.function_hw1_compare(img, h_slider, s_slider, l_slider)
+        img_f = img.astype(np.float64) / 255.0
+        manual = F._hw1_to_uint8(F._hw1_adjust_in_hsi(img_f, h_slider, s_slider, l_slider))
+        official = F._hw1_to_uint8(F._hw1_adjust_in_hls_opencv(img_f, h_slider, s_slider, l_slider))
+        m_hls = F._hw1_rgb_to_hls_opencv(manual.astype(np.float64) / 255.0)
+        o_hls = F._hw1_rgb_to_hls_opencv(official.astype(np.float64) / 255.0)
+        expected = F._hw1_hue_angle_delta(m_hls[:, :, 0], o_hls[:, :, 0])
+        match = re.search(r"H 平均角距离[^|]*\|\s*([0-9.]+)\s*度", text)
+        self.assertIsNotNone(match, "报告应给出按最短弧统计的 H 平均角距离")
+        self.assertAlmostEqual(float(match.group(1)), float(expected.mean()), delta=0.001)
+        for token in ("最短圆弧", "最大角距离", "双方饱和度", "直接相减"):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+
+    def test_difference_visualisation_does_not_wrap_around(self):
+        """差异图 ×5 放大必须在更宽的整数类型里做，否则 uint8 会按 256 取模回绕。"""
+        black = np.zeros((2, 2, 3), dtype=np.uint8)
+        white = np.full((2, 2, 3), 255, dtype=np.uint8)
+        raw = F._hw1_abs_diff(black, white)
+        self.assertEqual(int(raw.max()), 255)
+        self.assertEqual(int(raw.astype(np.int32).max() * 5), 1275,
+                         "255*5 的中间值应保存在 int16/int32 中，不能已被回绕")
+        vis = F._hw1_difference_vis(black, white)
+        self.assertEqual(vis.dtype, np.uint8)
+        self.assertTrue(np.all(vis == 255), "最大差异应饱和到 255")
+        # 60*5=300：若在 uint8 上乘会回绕成 44，这里必须是饱和后的 255
+        sixty = np.full((2, 2, 3), 60, dtype=np.uint8)
+        self.assertTrue(np.all(F._hw1_difference_vis(black, sixty) == 255))
+        # 小差异不应被裁剪
+        tiny = np.full((2, 2, 3), 3, dtype=np.uint8)
+        self.assertTrue(np.all(F._hw1_difference_vis(black, tiny) == 15))
+
+    def test_compare_figure_difference_panel_uses_the_same_scaling(self):
+        """对比图第 4 块面板必须就是 _hw1_difference_vis 的结果（无回绕）。"""
+        require_cv2(self)
+        img = gradient_image(16, 16)
+        figure, _ = F.function_hw1_compare(img, 0.0, 0.5, 0.0)
+        panel = figure[:, 3 * 16 + 3 * 4:, :]
+        self.assertEqual(panel.shape, (16, 16, 3))
+        img_f = img.astype(np.float64) / 255.0
+        manual = F._hw1_to_uint8(F._hw1_adjust_in_hsi(img_f, 0.0, 0.5, 0.0))
+        official = F._hw1_to_uint8(F._hw1_adjust_in_hls_opencv(img_f, 0.0, 0.5, 0.0))
+        self.assertTrue(np.array_equal(panel, F._hw1_difference_vis(manual, official)))
 
     def test_returns_figure_and_report_text(self):
         require_cv2(self)

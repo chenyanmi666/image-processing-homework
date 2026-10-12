@@ -12,9 +12,13 @@ def create_demo_hw1(process, process_compare=None):
     模式共 5 种：
       色相/饱和度                ：手写 HSL(HSI)，按课件 p72-p78 的数学定义
       色相/饱和度 (官方cv2 HLS)  ：直接调用 cv2.COLOR_BGR2HLS（L=(max+min)/2）
-      自然饱和度 (PS vibrance)   ：PS 风格自然饱和度（复用"饱和度"滑杆作为强度）
+      自然饱和度 (PS vibrance)   ：本作业自行设计的近似算法（复用"饱和度"滑杆作为强度）
       亮度/对比度                ：自定义线性模型
-      亮度/对比度 (PS风格)       ：PS 风格非线性模型（S 曲线 + gamma 亮度）
+      亮度/对比度 (PS风格)       ：本作业自行设计的非线性模拟（S 曲线 + gamma 亮度）
+
+    诚实说明：上面两项"PS 风格"功能都是**自行设计**的模型，没有使用真实 Photoshop
+    输出数据做拟合，也没有与 Photoshop 的实际输出逐像素比对（本机未安装 Photoshop）；
+    具体算法、实验依据与局限见 reports/hw1/hw1_report.pdf 第 5、6、8 节。
 
     process_compare 为可选的"进阶①：手写 vs 官方 cv2 HLS 对比实验"函数；
     传入时界面多出对比按钮与结果区，不传时界面与模板行为一致。
@@ -24,6 +28,9 @@ def create_demo_hw1(process, process_compare=None):
         gr.Markdown("说明：手写路径按课件 p72-p78 的 HSL(HSI) 定义"
                     "（亮度 L=(R+G+B)/3）；官方路径直接调用 cv2.COLOR_BGR2HLS"
                     "（亮度 L=(max+min)/2）。两者不是同一个数学模型，可用【对比实验】按钮查看差异。")
+        gr.Markdown("进阶功能说明：【亮度/对比度 (PS风格)】与【自然饱和度 (PS vibrance)】均为本作业"
+                    "**自行设计**的模拟 / 近似算法，未使用真实 Photoshop 输出数据拟合，"
+                    "也未与 Photoshop 实际输出做过逐像素比对。")
         with gr.Row():
             with gr.Column():
                 input_image = gr.Image(sources=['upload', 'webcam', 'clipboard'], type='numpy', label='输入图像')

@@ -35,7 +35,8 @@ python -m pytest tests/test_hw1.py -v
 | `TestOfficialCv2HlsPath` | 官方 `cv2.COLOR_BGR2HLS` 路径：5 个模式统一返回 7 路 uint8；OpenCV 定义 `L=(max+min)/2` 与课件定义 `L=(R+G+B)/3` 数值不同（灰色处重合）；默认参数恒等 `max ≤ 1`（8 位量化）；色相 ±180 周期性、红+180→青、S×(1-1)→灰、L×(1-1)→黑、饱和度单调性 |
 | `TestVibrance` | 进阶③：amount=0 恒等、增益随 S 单调递减且 ≤1+amount、纯色/灰色/纯白完全不动、负 amount 降饱和、随 amount 单调、忽略色相/明度滑杆、结果不同于整体饱和度缩放、通道分解图与结果一致 |
 | `TestPsStyleTone` | 进阶②：b=c=0 严格恒等、黑白端点固定、中灰锚定（±2）、解析中灰斜率与数值微分一致（c 从 -1 到 +1 共 5 档）、**减对比取同强度曲线的反函数**（中灰斜率 1→0.482，正负互为倒数，回归防护"偶函数把减对比变成增对比"）、对比度=1 不把 1/4 灰与 3/4 灰压到端点、亮度为 gamma 幂律且单调、暗部提升多于亮部、标定残差随目标斜率增大且 a ≤ 4、目标斜率 <1 时拟合出负 a（0.8→a<0、0.6 停在上限 -4）、与线性模型 MAE > 10 |
-| `TestCompareExperiment` | 进阶①：`_hw1_abs_diff` 不回绕、同图 PSNR=∞、拼接几何与补白、四联图宽度 = 4W+3×gap、各面板与两路径输出逐像素一致、统计文本含 MAE/PSNR/cv2/p72/量化/模型差异、恒等 MAE ≤ 1、模型差异随参数增大、L 定义差异 > S 定义差异 > 色相差异 |
+| `TestCompareExperiment` | 进阶①：`_hw1_abs_diff` 不回绕、同图 PSNR=∞、拼接几何与补白、四联图宽度 = 4W+3×gap、各面板与两路径输出逐像素一致、统计文本含 MAE/PSNR/cv2/p72/量化/模型差异、恒等 MAE ≤ 1、模型差异随参数增大、L 定义差异 > S 定义差异 > 色相差异；**色相按圆周最短弧统计**（`_hw1_hue_angle_delta`：359°↔1° 记 2°、对称、上限 180°、与“直接相减”口径对比）、报告中 H 一行与按最短弧重算的值一致、**差异图 ×5 放大不回绕**（int8/uint8 会按 256 取模：255×5→251、60×5→44；现改为 int32 内放大后裁剪，3×5=15 不被裁剪、255 饱和到 255） |
+| `TestSubmissionPackage` | 提交包 `submission/hw1/`：必需文件齐全（`functions.py` / `UI.py` / `web_demo.py` / `gradio_compat.py` / 报告 PDF / `README.md`）、**与工作区逐字节一致**、无多余 `.py`、README 写清依赖与“PS 风格”诚实声明、包内 `UI.py` 仍含作业1 的 5 个模式与对比实验接线 |
 
 ### 重要说明
 
@@ -92,11 +93,26 @@ python reports/hw1/make_report.py
 本机没有浏览器时 PDF 输出 SKIP 并保留 HTML 手动导出）。
 其中 `fig_ui.png` 为无头浏览器截图，**只作视觉证据，不等于人工浏览器验收**。
 
+## 提交包（作业1）
+
+```
+python tools/make_submission.py          # 生成/刷新 submission/hw1/（只复制 + 逐字节校验）
+python tests/test_hw1_submission.py      # 守卫测试：提交包与工作区必须逐字节一致
+```
+
+老师要求的提交物是 3 个 Python 文件（`functions.py`、`UI.py`、`web_demo.py`）+ 报告 PDF，
+但 `web_demo.py` 顶部 `import gradio_compat` 决定了 **`gradio_compat.py` 也是必需文件**：
+只交 3 个文件会在启动时 `ModuleNotFoundError`。因此正式提交清单为
+`functions.py` + `UI.py` + `web_demo.py` + `gradio_compat.py` + `hw1_report.pdf`
+（另附 `README.md`、`requirements.txt`），见 `submission/hw1/`。
+`web_demo.py` 里的 `gr.Blocks(css='style.css')` 传入的是字符串（gradio 将它当内联 CSS），
+仓库中并无 `style.css`，不影响运行，故提交包不含该文件。
+
 ## gradio 版本兼容层
 
 `gradio_compat.py`（仓库根目录）为 gradio 3.x 补上模板 `UI.py` 用到的 4.x 组件
 （`gr.ImageEditor` / `gr.Brush`），由 `web_demo.py` 顶部调用一次；
-`UI.py` 与 `functions.py` **保持字节级原样**（`git diff main -- UI.py` 为空）。
+`gradio_compat.py` **不修改** `UI.py` / `functions.py` 的组件写法（兼容层阶段这两个文件与 `main` 逐字节一致；阶段 I 起作业1 相关部分有受控改动，判定标准改为 `tests/test_hw1_ui_contract.py`：hw2~hw5 与 `main` 逐字节一致）。
 
 - 单元测试：`python tests/test_gradio_compat.py`
   （安装幂等性 / 不覆盖官方 API、4.x 输入契约、模板 `function_hw3` 的取心逻辑在 3.x 下仍成立、

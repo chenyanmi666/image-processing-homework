@@ -13,7 +13,7 @@
 | 当前分支 | `feat/image-processing-assignment` |
 | 基线 | `main` = `6dcd9f9148c476f32d2e0af07a3aa6b7ba2bce5f`，tag `template-baseline` |
 | 远程 | `origin` = 上方私有仓库；`main` / 功能分支 / tag 均已推送 |
-| 当前进度 | 阶段 A–I 已完成；作业1 已实现 **5 个模式**（手写 HSL / 官方 cv2.COLOR_BGR2HLS / PS 风格自然饱和度 / 线性亮度对比度 / PS 风格亮度对比度）+ **对比实验按钮与误差统计** + `reports/hw1` 报告材料（阶段 I）；数组层与兼容层 116 项测试、界面冒烟 23 项、前端真实渲染 13 项全部通过；完整 `web_demo.py` 已适配 gradio 3.36.1 **且前端真正渲染出 5 个页签**（阶段 H 修复了"卡在 Loading"），待进入作业2 |
+| 当前进度 | 阶段 A–J 已完成；作业1 已实现 **5 个模式**（手写 HSL / 官方 cv2.COLOR_BGR2HLS / PS 风格自然饱和度 / 线性亮度对比度 / PS 风格亮度对比度）+ **对比实验按钮与误差统计** + `reports/hw1` 报告材料（阶段 I）+ **色相圆周统计修复与提交包**（阶段 J）；数组层与兼容层 **127 项**测试（含提交包守卫 6 项）、界面冒烟 23 项、前端真实渲染 13 项全部通过；报告 PDF 终检通过（9 页、字体已嵌入、0 乱码、无越界裁切、118 个指标数字可检索）；`submission/hw1/` 已生成并在独立目录复跑通过；完整 `web_demo.py` 已适配 gradio 3.36.1 且前端真正渲染出 5 个页签，待进入作业2 |
 | 学号 | `2400013156`（已写入 `web_demo.py` 第 17 行） |
 
 ---
@@ -638,3 +638,61 @@ UI smoke: 23/23 PASS
 - 用户在本机浏览器人工验收作业1 的 5 个模式与对比实验按钮（确认后本阶段闭环）。
 - 之后进入作业2 `function_hw2`（本阶段**未**触碰作业2~5 的业务逻辑）。
 
+## 阶段 J · 作业1 收尾：色相圆周统计修复 + 提交包与 PDF 终检（2026-10-12）
+
+**触发**：作业1 进入最终验收（数组层测试 + 报告 PDF + 提交包 + 界面冒烟），收尾复查时发现 2 处真缺陷与 2 处文档/清单问题。
+
+### J1 · 改动清单（仍限定在作业1 范围）
+
+| 文件 | 改动 | 说明 |
+| --- | --- | --- |
+| `functions.py`（GBK+CRLF 保真） | 新增 `_hw1_hue_angle_delta`（圆周最短弧角距离：对称、上界 180°）；`_hw1_error_stats` 的 H 偏差改用它；对比差异图（`abs(diff)` ×5）改为 **int32 内放大后再裁剪** | 旧口径用 `abs(H1-H2)`；旧放大在 uint8 上做 |
+| `tests/test_hw1.py` | 90 → **95** 项（`TestCompareExperiment` +5） | 见 J2-①② |
+| `reports/hw1/make_report.py` + 全部产物 | H 行改用最短弧口径；正文加“色相误差的口径与局限”“差异图放大不回绕”说明；图 / `metrics.md` / HTML / PDF 重生成 | 数值全部当场实算 |
+| `tools/make_submission.py`（新增） | 生成 `submission/hw1/`：只复制 + 逐字节校验 + 写入 README/requirements | 不修改任何源码 |
+| `tests/test_hw1_submission.py`（新增） | **6 项**守卫测试：必需文件齐全、与工作区**逐字节一致**、PDF 一致、无多余 `.py`、README 含依赖与诚实声明、包内 `UI.py` 仍有 5 模式与对比接线 | 防止“提交包与代码脱节” |
+| `submission/hw1/`（新增，提交物） | `functions.py`(27010B) `UI.py`(8979B) `web_demo.py`(1877B) `gradio_compat.py`(7231B) `hw1_report.pdf`(1945942B) `README.md`(3983B) `requirements.txt`(27B) | 不含 `style.css`（见 J2-⑤） |
+| `tests/README.md` | 补 `TestCompareExperiment` 的圆周/回绕说明、新增 `TestSubmissionPackage` 行与“提交包（作业1）”章节；修正兼容层章节里已被阶段 I 取代的“`UI.py` 与 `main` 逐字节一致”表述 | |
+| `PROJECT_LOG.md` | 本阶段 | |
+
+### J2 · 本轮发现与修复
+
+1. **色相误差口径错误（真缺陷）**：H 是角度量，`abs(H1-H2)` 会把 359° 与 1° 记成 358°（真实最短弧为 2°）。
+   已改为最短圆弧角距离，并补 3 项测试（圆周性、对称与上界、**报告里的 H 一行必须等于按最短弧重算的值**）；
+   同一空间（cv2 HLS）的 H 平均角距离 **1.543°**、最大 **8.000°**（色相 +90° 案例）。
+2. **差异图放大整数回绕（真缺陷）**：`|Δ|×5` 若在 uint8 上做会按 256 取模（255×5=1275→251、60×5=300→44），
+   “放大后反而变暗”。已改为 int32 内放大后再裁剪；补 2 项回归测试（255 饱和到 255、3×5=15 不被误裁剪、四联差异面板同一标度）。
+3. **提交清单与老师列的不一致**：老师要求 3 个 py（`functions.py`/`UI.py`/`web_demo.py`）+ 报告 PDF，
+   但 `web_demo.py` 顶部 `import gradio_compat` 使 **`gradio_compat.py` 为必需文件**；
+   只交 3 个文件在干净环境下会 `ModuleNotFoundError`。因此提交包为 **4 个 py + PDF**（另附 README/requirements），
+   并在包内 README 写清理由。
+4. **提交包 README 曾写死“8 页”**：实际 PDF 为 **9 页**，已删去硬编码页数，避免文档与产物脱节。
+5. `gr.Blocks(css='style.css')` 中 `style.css` 是**字符串**（gradio 当内联 CSS），仓库中并无该文件，
+   不影响运行 → 提交包不提供该文件（已写入包内 README 与 `tests/README.md`）。
+
+### J3 · 本轮实际执行的检查与结果
+
+| 项目 | 命令 | 实际结果 |
+| --- | --- | --- |
+| 全量测试 | `python -m unittest discover -s tests` | **Ran 127 tests … OK**（1.149 s 与 1.202 s 两次独立运行一致） |
+| 提交包守卫 | `python tests/test_hw1_submission.py` | **Ran 6 tests … OK**（0.019 s） |
+| 界面冒烟 | `python tests/ui_smoke_hw1.py --port 8093` | **23/23 PASS**（模式下拉 5 项、compare 事件已注册、compare 图 (32,140,3)、报告含 MAE/PSNR/cv2/量化） |
+| 报告/PDF 重生成 | `python reports/hw1/make_report.py` | `hw1_report.html` 1790942 B、`hw1_report.pdf` 1945942 B、`fig_ui.png` 105669 B（rc=0） |
+| 提交包生成 | `python tools/make_submission.py` | 4 个 py“逐字节一致”复制 + PDF + README + requirements，清单见 J1 |
+| PDF 终检 | 脚本化文字层检查 + 逐页渲染目视 | **9 页**、字体已嵌入、**0 乱码**、无越界裁切、**118 个指标数字可检索** |
+| 独立目录验证 | `C:\temp\subcheck2\`（只放提交包 4 个 py + requirements + 检查脚本） | `import functions/UI/web_demo` OK；手写路径 7 路输出且恒等逐像素相等；官方路径 `[255,1,1]`（8 位量化）；3 个进阶/基础模式恒等通过；compare 图 (3,28,3)、报告文本 1059 字符含 MAE；`gr.Blocks` 可构建 → **ALL PASSED** |
+
+### J4 · 诚实声明与局限
+
+- PDF 检查为**脚本化文字层检查 + 逐页 PNG 目视**，**不等于**对课程全部格式要求（页边距/装订/命名等）的官方核验。
+- 独立目录验证在**同一台本机的 `C:\temp`** 完成，只证明“无仓库内隐藏依赖”，**不排除**本机 conda 环境已装依赖的影响；
+  `requirements.txt` **未**在全新虚拟环境里重装验证。
+- H 偏差只能在“两路输出 RGB 换算回同一空间后”比较，且低饱和/近灰像素的色相数值不稳定
+  （已单列 `S ≥ 0.10` 口径）；**不判定**哪种实现“更准确”。
+- 界面证据仍为自动化（冒烟 + 无头浏览器渲染），**人工浏览器验收仍待用户完成**。
+- `PS 风格` 两个功能仍未与真实 Photoshop 比对（本机未装）。
+
+### J5 · 下一步
+
+- 用户在浏览器人工验收通过后，按课程要求提交 `submission/hw1/` 内容。
+- PR 保持**未合并**（需用户明确批准）。

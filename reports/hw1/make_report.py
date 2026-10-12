@@ -398,16 +398,19 @@ def html_report(data, compare_text, figures, test_summary):
         "<tr><td>色相/饱和度 (官方cv2 HLS)</td><td>直接调用 cv2.COLOR_BGR2HLS / COLOR_HLS2BGR</td>"
         "<td>官方路径：L=(max+min)/2、S=(max-min)/(max+min)，色相平移/饱和度/亮度语义与手写路径对齐</td></tr>"
         "<tr><td>自然饱和度 (PS vibrance)</td><td>gain(S)=1+amount·(1-S)²</td>"
-        "<td>进阶③：优先提升原本不鲜艳的颜色，纯色与灰色保持不变</td></tr>"
+        "<td>进阶③：优先提升原本不鲜艳的颜色，纯色与灰色保持不变；<b>自行设计</b>的近似算法（未用真实 Photoshop 输出拟合）</td></tr>"
         "<tr><td>亮度/对比度</td><td>线性模型 (x-0.5)(1+c)+0.5+b</td>"
         "<td>基础功能（自定义线性模型，<b>不是</b> Photoshop 拟合）</td></tr>"
         "<tr><td>亮度/对比度 (PS风格)</td><td>tanh S 曲线 + gamma 亮度</td>"
-        "<td>进阶②：中灰与黑白端点锚定、不裁剪</td></tr></table>")
+        "<td>进阶②：中灰与黑白端点锚定、不裁剪；<b>自行设计</b>的模拟（未用真实 Photoshop 输出拟合）</td></tr></table>")
 
     tables = markdown_report(data, compare_text)
     add("<h2>3. 实验一：两条路径的数学定义对照</h2>")
     add("<p>两条路径的 H/S/L 数值<b>本来就不可直接互比</b>：课件定义 L=(R+G+B)/3，"
         "OpenCV 定义 L=(max+min)/2；只在两者定义重合处（灰色）才必然相等。</p>")
+    add('<p>色相 H 是角度量（周期 360°），本报告中的色相差一律按 <b>圆周最短弧</b> 统计'
+        '（359° 与 1° 相差 2°，而不是 358°；取值上限 180°）；S 趋近 0 的灰/近灰像素色相在数值上'
+        '不稳定，相关口径与解释局限见第 4 节。</p>')
     add(_md_to_html(tables.split("### function_hw1_compare")[0]))
 
     add("<h2>4. 实验一：输出层面的对比与误差统计</h2>")
@@ -417,6 +420,13 @@ def html_report(data, compare_text, figures, test_summary):
     add("<p><img src=\"%s\" alt=\"strip\"></p>" % _data_uri(figures["strip"]))
     add("<p>统计文本（原样）：</p>")
     add("<pre>%s</pre>" % compare_text.replace("&", "&amp;").replace("<", "&lt;"))
+    add('<div class="note"><b>色相误差的口径与局限</b>：H 是角度量，本报告的 H 偏差取最短圆弧角距离'
+        '（直接相减 abs(H1-H2) 会把跨越 0°/360° 的一对角度记错，例如 359° 与 1° 会被记成 358°）。'
+        '当饱和度 S 趋近 0（灰、近灰、极暗像素）时，色相在数值上不稳定：官方路径的 8 位量化或'
+        '极小的 RGB 差异都可能让 H 大幅跳动，因此统计单列“双方饱和度均 ≥ 0.10 的像素”这一口径。'
+        '该口径减少但不能完全消除这一局限，H 偏差只能在“两路输出 RGB 换算回同一空间后”比较，'
+        '<b>不能</b>据此判定哪一方实现更准确。差异图面板按 |Δ|×5 放大，放大在 int32 内完成后再裁剪到'
+        '255，不会发生 uint8 整数回绕。</div>')
 
     add("<h2>5. 进阶②：PS 风格亮度/对比度</h2>")
     add("<p><img src=\"%s\" alt=\"ps\"></p>" % _data_uri(figures["ps"]))
@@ -429,6 +439,10 @@ def html_report(data, compare_text, figures, test_summary):
     add("<h2>6. 进阶③：PS 风格自然饱和度</h2>")
     add("<p><img src=\"%s\" alt=\"vibrance\"></p>" % _data_uri(figures["vib"]))
     add("<p>增益随 S 增大而衰减：S=1（纯色）时增益恒为 1，灰色 S=0 时输出仍为 0（不会被染色）。</p>")
+    add('<div class="note">诚实声明：该模型 <code>gain(S)=1+amount·(1-S)²</code> 是本作业'
+        '<b>自行设计</b>的近似算法（借鉴“越不鲜艳提升越多”的定性行为），'
+        '<b>没有</b>使用真实 Photoshop 输出数据做任何拟合，也未与 Photoshop 的实际输出逐像素比对'
+        '（本机未安装 Photoshop）。</div>')
 
     if figures.get("ui"):
         add("<h2>7. 界面证据（无头浏览器截图）</h2>")
@@ -440,7 +454,9 @@ def html_report(data, compare_text, figures, test_summary):
     add(_md_to_html("- 手写路径与官方路径是**两套数学模型**，结果不一致不代表任何一方实现错误；报告把“模型差异”与“8 位量化误差”分开统计。\n"
                     "- 官方路径内部为 8 位量化（`COLOR_BGR2HLS`），其“恒等”往返在饱和色上会残留至多 1 个 LSB（例如纯红恒等得到 (255,1,1)）；手写路径在浮点域往返，恒等为严格相等。\n"
                     "- 亮度乘性模型 `I'=I·(1+l)` 是本作业的默认设计，不是不可变的数学要求；裁剪会改变实际 H/S/I，报告未宣称裁剪后其余通道严格不变。\n"
-                    "- `cv2.cvtColor(COLOR_RGB2HLS)` 与本作业手写定义不同，本报告未据通道误差判定谁“更准确”。\n"))
+                    "- `cv2.cvtColor(COLOR_RGB2HLS)` 与本作业手写定义不同，本报告未据通道误差判定谁“更准确”。\n"
+                    "- “PS 风格”的两个功能（亮度/对比度、自然饱和度）都是**自行设计**的模拟 / 近似模型；本作业**没有**用真实 Photoshop 的输出数据做任何拟合，也**未**与 Photoshop 实际输出做逐像素比对（本机未安装 Photoshop），因此全篇只写“PS 风格”，不写“复刻 PS”“拟合 PS”“与 PS 一致”。\n"
+                    "- 色相差值按**圆周最短弧**统计（上限 180°），并单列“双方饱和度 ≥ 0.10 的像素”口径；低饱和度 / 灰像素的色相在数值上不稳定，该局限已在第 4 节写明。\n"))
     add("</body></html>")
     return "\n".join(parts)
 
@@ -538,9 +554,11 @@ def html_to_pdf(html_path, pdf_path):
     return None
 
 
-TEST_SUMMARY = ("数组层/兼容层：python -m unittest discover -s tests -> Ran 105 tests, OK；"
-                "界面层冒烟：python tests/ui_smoke_hw1.py --port 8093 -> UI smoke: 23/23 PASS；"
-                "明细见 PROJECT_LOG.md 阶段 I。无头浏览器渲染测试见 tests/README.md。")
+TEST_SUMMARY = ("数组层/兼容层：python -m unittest discover -s tests -> Ran 127 tests, OK；"
+                "界面层冒烟（真实 gradio 服务）：python tests/ui_smoke_hw1.py --port 8093；"
+                "无头浏览器渲染：python tests/test_frontend_render.py；"
+                "本次新增“H 圆周角距离”与“差异图防整数回绕”的回归测试，"
+                "各次实测记录见 PROJECT_LOG.md，运行方式见 tests/README.md。")
 
 
 def main():
