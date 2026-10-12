@@ -39,7 +39,21 @@ except Exception:  # pragma: no cover - 取决于本机是否安装 gradio
 import functions as F  # noqa: E402
 
 HUE_SAT = "色相/饱和度"
+OFFICIAL_HLS = "色相/饱和度 (官方cv2 HLS)"
+VIBRANCE = "自然饱和度 (PS vibrance)"
 BRIGHT_CONTRAST = "亮度/对比度"
+PS_TONE = "亮度/对比度 (PS风格)"
+ALL_MODES = (HUE_SAT, OFFICIAL_HLS, VIBRANCE, BRIGHT_CONTRAST, PS_TONE)
+
+
+def require_cv2(case):
+    """官方路径依赖 OpenCV；缺失时跳过而不是失败（并留下可见提示）。"""
+    try:
+        import cv2
+    except ImportError:
+        case.skipTest("本机未安装 OpenCV(cv2)，跳过官方 HLS 路径测试")
+    else:
+        return cv2
 
 
 def hw1(img, mode=HUE_SAT, h=0.0, s=0.0, l=0.0, b=0.0, c=0.0):
@@ -417,6 +431,375 @@ class TestEdgeAndPerformance(unittest.TestCase):
         elapsed = time.time() - start
         print("  512x512 elapsed: %.3f s" % elapsed)
         self.assertLess(elapsed, 5.0)
+
+
+class TestOfficialCv2HlsPath(unittest.TestCase):
+    """基本信息（60 分档）：直接调用 cv2.COLOR_BGR2HLS 的官方路径。
+
+    课件定义与 OpenCV 定义是**两套不同的数学模型**：
+      课件(p72-p78)：L = (R+G+B)/3,  S = 1 - 3*min/(R+G+B)
+      OpenCV HLS   ：L = (max+min)/2, S = (max-min)/(max+min)
+    因此这里既验证官方路径自身的行为，也固定"两者数值本来就不同"这一事实。
+    """
+
+    def test_all_five_modes_return_seven_uint8_outputs(self):
+        img = gradient_image(8, 12)
+        for mode in ALL_MODES:
+            with self.subTest(mode=mode):
+                outs = hw1(img, mode, 0.2, 0.3, 0.1, 0.2, 0.3)
+                self.assertEqual(len(outs), 7)
+                out, r, g, b, h, s, l = outs
+                self.assertEqual(out.shape, (8, 12, 3))
+                for ch in (r, g, b, h, s, l):
+                    self.assertEqual(ch.shape, (8, 12))
+                for arr in outs:
+                    self.assertEqual(arr.dtype, np.uint8)
+
+    def test_official_space_uses_max_min_definition(self):
+        require_cv2(self)
+        red = F._hw1_rgb_to_hls_opencv(np.array([[[1.0, 0.0, 0.0]]]))
+        self.assertAlmostEqual(float(red[0, 0, 2]), 128.0 / 255.0, places=3)   # L=(255+0)/2
+        self.assertAlmostEqual(float(red[0, 0, 1]), 1.0, places=3)             # S=(max-min)/(max+min)
+        self.assertAlmostEqual(float(red[0, 0, 0]), 0.0, places=3)             # H=0
+
+    def test_manual_space_uses_mean_definition_and_differs(self):
+        require_cv2(self)
+        red_f = np.array([[[1.0, 0.0, 0.0]]])
+        manual = F._hw1_rgb_to_hsi(red_f)
+        official = F._hw1_rgb_to_hls_opencv(red_f)
+        self.assertAlmostEqual(float(manual[0, 0, 2]), 1.0 / 3.0, places=3)    # L=(R+G+B)/3
+        self.assertGreater(abs(float(manual[0, 0, 2] - official[0, 0, 2])), 0.15,
+                           "两套 L 定义必须给出不同数值，否则说明实现退化成了同一个模型")
+
+    def test_gray_agrees_because_two_models_coincide(self):
+        require_cv2(self)
+        gray_f = np.full((1, 1, 3), 128.0 / 255.0)
+        self.assertAlmostEqual(float(F._hw1_rgb_to_hsi(gray_f)[0, 0, 2]),
+                               float(F._hw1_rgb_to_hls_opencv(gray_f)[0, 0, 2]), places=3)
+
+    def test_official_identity_is_within_one_quantization_level(self):
+        require_cv2(self)
+        img = gradient_image(32, 32)
+        out, *_ = hw1(img, OFFICIAL_HLS)
+        stats = F._hw1_error_stats(img, out)
+        self.assertLessEqual(stats["max"], 1.0, "默认参数的官方路径往返误差应只有 8 位量化(<=1 LSB)")
+        self.assertLess(stats["mae"], 0.5)
+
+    def test_manual_identity_is_exact(self):
+        img = gradient_image(32, 32)
+        out, *_ = hw1(img, HUE_SAT)
+        self.assertTrue(np.array_equal(out, img), "手写路径在浮点域往返，默认参数必须逐像素相等")
+
+    def test_official_hue_180_turns_red_into_cyan(self):
+        require_cv2(self)
+        out, *_ = hw1(solid((255, 0, 0)), OFFICIAL_HLS, h=1.0)
+        r, g, b = (int(v) for v in out[0, 0])
+        self.assertLess(r, 8)
+        self.assertGreater(g, 247)
+        self.assertGreater(b, 247)
+
+    def test_official_hue_is_periodic_over_360(self):
+        require_cv2(self)
+        img = gradient_image(8, 8)
+        plus, *_ = hw1(img, OFFICIAL_HLS, h=1.0)
+        minus, *_ = hw1(img, OFFICIAL_HLS, h=-1.0)
+        self.assertTrue(np.array_equal(plus, minus))
+
+    def test_official_saturation_minus_one_gives_gray(self):
+        require_cv2(self)
+        out, *_ = hw1(solid((255, 0, 0)), OFFICIAL_HLS, s=-1.0)
+        pixel = out[0, 0].astype(np.int32)
+        self.assertLessEqual(int(pixel.max() - pixel.min()), 1)
+        self.assertLess(abs(int(pixel.mean()) - 128), 3)
+
+    def test_official_lightness_minus_one_gives_black(self):
+        require_cv2(self)
+        out, *_ = hw1(solid((255, 0, 0)), OFFICIAL_HLS, l=-1.0)
+        self.assertEqual(int(out.max()), 0)
+
+    def test_official_saturation_is_monotone(self):
+        require_cv2(self)
+        img = solid((200, 120, 120), 8)
+        spreads = []
+        for s in (-0.5, 0.0, 0.5, 1.0):
+            out, *_ = hw1(img, OFFICIAL_HLS, s=s)
+            pixel = out[0, 0].astype(np.int32)
+            spreads.append(int(pixel.max() - pixel.min()))
+        self.assertEqual(spreads, sorted(spreads))
+        self.assertLess(spreads[0], spreads[-1])
+
+
+class TestVibrance(unittest.TestCase):
+    """进阶③：PS 风格自然饱和度 gain(S) = 1 + amount*(1-S)^2。"""
+
+    def test_zero_amount_is_identity(self):
+        sat = np.linspace(0.0, 1.0, 32).reshape(1, -1)
+        self.assertTrue(np.array_equal(F._hw1_apply_vibrance(sat, 0.0), sat))
+
+    def test_gain_decreases_with_saturation(self):
+        sat = np.array([[[0.2, 0.5, 0.8, 1.0]]])
+        gains = [float(v) for v in (F._hw1_apply_vibrance(sat, 1.0) / sat)[0, 0]]
+        self.assertEqual(gains, sorted(gains, reverse=True), "低饱和像素必须获得更大增益")
+        self.assertGreater(gains[0], 1.5)
+        self.assertAlmostEqual(gains[-1], 1.0, places=6, msg="纯色不能被改动")
+
+    def test_gain_is_bounded_by_amount(self):
+        sat = np.array([[[0.1, 0.3, 0.6, 0.9]]])
+        for amount in (0.25, 0.5, 1.0):
+            gains = F._hw1_apply_vibrance(sat, amount) / sat
+            self.assertLessEqual(float(gains.max()), 1.0 + amount + 1e-9)
+
+    def test_gray_and_pure_color_are_untouched(self):
+        for color in ((128, 128, 128), (255, 0, 0), (255, 255, 255)):
+            with self.subTest(color=color):
+                out, *_ = hw1(solid(color, 8), VIBRANCE, s=1.0)
+                self.assertTrue(np.array_equal(out, solid(color, 8)),
+                                "%s 的 S 已在边界，自然饱和度不得改变它" % (color,))
+
+    def test_negative_amount_reduces_colourfulness(self):
+        img = solid((200, 120, 120), 8)
+        base = hw1(img, VIBRANCE, s=0.0)[0][0, 0].astype(np.int32)
+        down = hw1(img, VIBRANCE, s=-1.0)[0][0, 0].astype(np.int32)
+        self.assertLess(int(down.max() - down.min()), int(base.max() - base.min()))
+
+    def test_output_is_monotone_in_amount(self):
+        img = solid((190, 150, 140), 8)
+        spreads = []
+        for amount in (-1.0, -0.5, 0.0, 0.5, 1.0):
+            pixel = hw1(img, VIBRANCE, s=amount)[0][0, 0].astype(np.int32)
+            spreads.append(int(pixel.max() - pixel.min()))
+        self.assertEqual(spreads, sorted(spreads))
+
+    def test_mode_ignores_hue_and_lightness_sliders(self):
+        img = gradient_image(12, 12)
+        a, *_ = hw1(img, VIBRANCE, h=1.0, s=0.6, l=1.0)
+        b, *_ = hw1(img, VIBRANCE, h=-1.0, s=0.6, l=-1.0)
+        self.assertTrue(np.array_equal(a, b))
+
+    def test_differs_from_plain_saturation_scaling(self):
+        img = solid((190, 150, 140), 8)
+        vibe, *_ = hw1(img, VIBRANCE, s=0.5)
+        plain, *_ = hw1(img, HUE_SAT, s=0.5)
+        self.assertFalse(np.array_equal(vibe, plain),
+                         "自然饱和度不能等同于整体饱和度线性缩放，否则不算独立进阶功能")
+
+    def test_channel_maps_match_result(self):
+        img = gradient_image(8, 8)
+        out, r, g, b, h, s, l = hw1(img, VIBRANCE, s=0.4)
+        self.assertTrue(np.array_equal(r, out[:, :, 0]))
+        expected_l = np.clip(np.rint(
+            F._hw1_rgb_to_hsi(out.astype(np.float64) / 255.0)[:, :, 2] * 255.0), 0, 255).astype(np.uint8)
+        self.assertTrue(np.array_equal(l, expected_l))
+
+
+class TestPsStyleTone(unittest.TestCase):
+    """进阶②：PS 风格亮度/对比度（tanh S 曲线 + gamma 亮度，端点与中灰锚定）。
+
+    诚实声明：本机没有 Photoshop，**未做**与 PS 实际输出的逐像素比对，
+    因此这里验证的是本实现自洽的数学性质（锚点、单调性、解析斜率、标定残差），
+    而不是"与 PS 一致"。
+    """
+
+    def test_zero_parameters_are_identity(self):
+        img = gradient_image(16, 16)
+        out, *_ = hw1(img, PS_TONE, b=0.0, c=0.0)
+        self.assertTrue(np.array_equal(out, img))
+
+    def test_black_and_white_endpoints_are_fixed(self):
+        for brightness, contrast in ((0.7, 0.8), (-0.7, -0.8), (1.0, 1.0)):
+            with self.subTest(brightness=brightness, contrast=contrast):
+                black, *_ = hw1(solid((0, 0, 0), 4), PS_TONE, b=brightness, c=contrast)
+                white, *_ = hw1(solid((255, 255, 255), 4), PS_TONE, b=brightness, c=contrast)
+                self.assertEqual(int(black.max()), 0, "黑色端点必须保持为 0")
+                self.assertEqual(int(white.min()), 255, "白色端点必须保持为 255")
+
+    def test_mid_gray_is_anchored(self):
+        gray = solid((128, 128, 128), 4)
+        for contrast in (-1.0, 0.0, 1.0):
+            out, *_ = hw1(gray, PS_TONE, b=0.0, c=contrast)
+            self.assertLessEqual(abs(int(out[0, 0, 0]) - 128), 2)
+
+    def test_contrast_steepens_mid_slope_and_matches_numeric_derivative(self):
+        h = 1e-6
+        for contrast in (-1.0, -0.5, 0.0, 0.5, 1.0):
+            a = F._hw1_ps_contrast_a(contrast)
+            numeric = float(F._hw1_ps_s_curve(np.array([0.5 + h]), a)[0]
+                            - F._hw1_ps_s_curve(np.array([0.5 - h]), a)[0]) / (2 * h)
+            self.assertAlmostEqual(numeric, F._hw1_ps_mid_slope(contrast), places=4)
+        self.assertAlmostEqual(F._hw1_ps_mid_slope(0.0), 1.0, places=9)
+        self.assertGreater(F._hw1_ps_mid_slope(1.0), F._hw1_ps_mid_slope(0.5))
+        self.assertGreater(F._hw1_ps_mid_slope(0.5), F._hw1_ps_mid_slope(0.0))
+        self.assertLess(F._hw1_ps_mid_slope(-0.5), 1.0)
+        self.assertLess(F._hw1_ps_mid_slope(-1.0), F._hw1_ps_mid_slope(-0.5))
+
+    def test_negative_contrast_is_not_a_copy_of_positive_contrast(self):
+        """回归防护：s 曲线公式对 a 是偶函数，直接代入 a<0 会与 a>0 完全相同。"""
+        x = np.linspace(0.0, 1.0, 33)
+        positive = F._hw1_ps_s_curve(x, 4.0)
+        negative = F._hw1_ps_s_curve(x, -4.0)
+        self.assertFalse(np.allclose(positive, negative), "减对比必须真的把曲线压平")
+        self.assertTrue(np.allclose(F._hw1_ps_s_curve(x, 4.0), 2.0 * 0.5 - F._hw1_ps_s_curve(1.0 - x, 4.0)))
+
+    def test_negative_contrast_compresses_towards_mid_gray(self):
+        quarter, *_ = hw1(solid((64, 64, 64), 4), PS_TONE, c=-1.0)
+        three_quarters, *_ = hw1(solid((192, 192, 192), 4), PS_TONE, c=-1.0)
+        self.assertGreater(int(quarter[0, 0, 0]), 64, "减对比应把暗部拉向中灰")
+        self.assertLess(int(three_quarters[0, 0, 0]), 192, "减对比应把亮部拉向中灰")
+        mid, *_ = hw1(solid((128, 128, 128), 4), PS_TONE, c=-1.0)
+        self.assertLessEqual(abs(int(mid[0, 0, 0]) - 128), 2)
+
+    def test_calibration_residual_grows_with_target_slope(self):
+        residuals = []
+        for target in (1.2, 1.5, 2.0):
+            a_fit, rms, max_err = F._hw1_ps_fit_contrast_a(target)
+            self.assertLessEqual(a_fit, 4.0 + 1e-9, "斜率参数必须落在设计上限内")
+            self.assertLessEqual(rms, max_err)
+            residuals.append(rms)
+        self.assertEqual(residuals, sorted(residuals))
+        a_zero, rms_zero, _ = F._hw1_ps_fit_contrast_a(1.0)
+        self.assertAlmostEqual(a_zero, 0.0, places=6)
+        self.assertAlmostEqual(rms_zero, 0.0, places=9)
+
+    def test_calibration_handles_target_slopes_below_one(self):
+        a_fit, rms, max_err = F._hw1_ps_fit_contrast_a(0.8)
+        self.assertLess(a_fit, 0.0, "目标中灰斜率小于 1 时必须拟合出负的 a（减对比）")
+        self.assertLessEqual(rms, 0.05)
+        self.assertLessEqual(max_err, 0.11)
+        a_flat, _, _ = F._hw1_ps_fit_contrast_a(0.6)
+        self.assertAlmostEqual(a_flat, -4.0, places=6, msg="低于可达下限的目标斜率应停在上限 a=-4")
+
+
+    def test_full_contrast_does_not_clip_midtones(self):
+        quarter, *_ = hw1(solid((64, 64, 64), 4), PS_TONE, c=1.0)
+        three_quarters, *_ = hw1(solid((192, 192, 192), 4), PS_TONE, c=1.0)
+        self.assertGreater(int(quarter.min()), 0, "S 曲线不应把 1/4 灰压到纯黑")
+        self.assertLess(int(three_quarters.max()), 255, "S 曲线不应把 3/4 灰顶到纯白")
+        self.assertLess(int(quarter[0, 0, 0]), 64)
+        self.assertGreater(int(three_quarters[0, 0, 0]), 192)
+
+    def test_brightness_is_gamma_and_monotone(self):
+        values = []
+        for brightness in (-1.0, -0.5, 0.0, 0.5, 1.0):
+            out, *_ = hw1(solid((64, 64, 64), 4), PS_TONE, b=brightness, c=0.0)
+            values.append(int(out[0, 0, 0]))
+        self.assertEqual(values, sorted(values), "亮度必须单调")
+        x = np.linspace(0.0, 1.0, 64).reshape(1, -1, 1)
+        x = np.repeat(x, 3, axis=2)
+        gamma = 2.0 ** (-2.0 * 0.5)
+        self.assertTrue(np.allclose(F._hw1_ps_brightness_contrast(x, 0.5, 0.0), x ** gamma))
+
+    def test_brightness_lifts_shadows_more_than_highlights(self):
+        dark, *_ = hw1(solid((64, 64, 64), 4), PS_TONE, b=1.0)
+        bright, *_ = hw1(solid((224, 224, 224), 4), PS_TONE, b=1.0)
+        self.assertGreater(int(dark[0, 0, 0]) - 64, int(bright[0, 0, 0]) - 224)
+
+    def test_calibration_residual_grows_with_target_slope(self):
+        residuals = []
+        for target in (1.2, 1.5, 2.0):
+            a_fit, rms, max_err = F._hw1_ps_fit_contrast_a(target)
+            self.assertLessEqual(a_fit, 4.0 + 1e-9, "斜率参数必须落在设计上限内")
+            self.assertLessEqual(rms, max_err)
+            residuals.append(rms)
+        self.assertEqual(residuals, sorted(residuals))
+        a_zero, rms_zero, _ = F._hw1_ps_fit_contrast_a(1.0)
+        self.assertAlmostEqual(a_zero, 0.0, places=6)
+        self.assertAlmostEqual(rms_zero, 0.0, places=9)
+
+    def test_differs_from_linear_model(self):
+        img = gradient_image(32, 32)
+        ps_out, *_ = hw1(img, PS_TONE, b=0.3, c=0.5)
+        linear, *_ = hw1(img, BRIGHT_CONTRAST, b=0.3, c=0.5)
+        stats = F._hw1_error_stats(linear, ps_out)
+        self.assertGreater(stats["mae"], 10.0, "PS 风格必须与线性模型有实质差异，否则是重复实现")
+
+    def test_ignores_hue_sliders(self):
+        img = gradient_image(12, 12)
+        a, *_ = hw1(img, PS_TONE, h=1.0, s=1.0, l=1.0, b=0.2, c=0.4)
+        b, *_ = hw1(img, PS_TONE, h=-1.0, s=-1.0, l=-1.0, b=0.2, c=0.4)
+        self.assertTrue(np.array_equal(a, b))
+
+
+class TestCompareExperiment(unittest.TestCase):
+    """进阶①：手写 HSL(课件定义) vs 官方 cv2 HLS 的对比实验与误差统计。"""
+
+    def test_error_stats_does_not_wrap_around(self):
+        a = np.zeros((2, 2, 3), dtype=np.uint8)
+        b = np.full((2, 2, 3), 255, dtype=np.uint8)
+        self.assertEqual(int(F._hw1_abs_diff(a, b).max()), 255)
+        stats = F._hw1_error_stats(a, b)
+        self.assertAlmostEqual(stats["mae"], 255.0)
+        self.assertLessEqual(stats["psnr"], 0.1, "误差全为 255 时 PSNR 应为 0 dB（下限）")
+
+    def test_error_stats_of_identical_images_is_zero_mae_and_infinite_psnr(self):
+        img = gradient_image(8, 8)
+        stats = F._hw1_error_stats(img, img)
+        self.assertEqual(stats["mae"], 0.0)
+        self.assertEqual(stats["max"], 0.0)
+        self.assertEqual(stats["psnr"], float("inf"))
+
+    def test_side_by_side_geometry_and_padding(self):
+        a = np.full((4, 4, 3), 10, dtype=np.uint8)
+        b = np.full((6, 4, 3), 20, dtype=np.uint8)
+        joined = F._hw1_side_by_side([a, b], gap=2)
+        self.assertEqual(joined.shape, (6, 4 + 2 + 4, 3))
+        self.assertTrue(np.all(joined[4:, 0:4] == 255), "较矮的图底部应补白")
+
+    def test_returns_figure_and_report_text(self):
+        require_cv2(self)
+        figure, text = F.function_hw1_compare(gradient_image(16, 16), 0.0, 0.0, 0.0)
+        self.assertEqual(figure.dtype, np.uint8)
+        self.assertEqual(figure.shape[0], 16)
+        self.assertEqual(figure.shape[1], 4 * 16 + 3 * 4)
+        self.assertIsInstance(text, str)
+        for token in ("MAE", "PSNR", "cv2", "p72", "量化", "模型差异"):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+
+    def test_figure_panels_match_the_two_implementations(self):
+        require_cv2(self)
+        img = gradient_image(16, 16)
+        figure, _ = F.function_hw1_compare(img, 0.0, 0.5, 0.0)
+        manual = hw1(img, HUE_SAT, s=0.5)[0]
+        official = hw1(img, OFFICIAL_HLS, s=0.5)[0]
+        self.assertTrue(np.array_equal(figure[:, 0:16], img))
+        self.assertTrue(np.array_equal(figure[:, 20:36], manual), "第 2 幅必须是手写课件定义的结果")
+        self.assertTrue(np.array_equal(figure[:, 40:56], official), "第 3 幅必须是官方 cv2 HLS 的结果")
+
+    def test_none_image_raises(self):
+        with self.assertRaises(Exception) as ctx:
+            F.function_hw1_compare(None, 0.0, 0.0, 0.0)
+        message = str(ctx.exception)
+        self.assertIn("输入一张图像", message)
+        self.assertIn("处理之前", message)
+
+    def test_identity_parameters_agree_within_one_lsb(self):
+        require_cv2(self)
+        stats = F._hw1_error_stats(*[hw1(gradient_image(24, 24), mode)[0]
+                                     for mode in (HUE_SAT, OFFICIAL_HLS)])
+        self.assertLessEqual(stats["max"], 1.0)
+
+    def test_model_divergence_grows_with_saturation(self):
+        require_cv2(self)
+        img = gradient_image(24, 24)
+        errors = [F._hw1_error_stats(hw1(img, HUE_SAT, s=s)[0], hw1(img, OFFICIAL_HLS, s=s)[0])["mae"]
+                  for s in (0.0, 0.5, 1.0)]
+        self.assertEqual(errors, sorted(errors))
+        self.assertGreater(errors[-1], errors[0] * 1.5)
+
+    def test_lightness_definition_difference_dominates(self):
+        require_cv2(self)
+        img = gradient_image(24, 24)
+        l_err = F._hw1_error_stats(hw1(img, HUE_SAT, l=0.5)[0], hw1(img, OFFICIAL_HLS, l=0.5)[0])["mae"]
+        s_err = F._hw1_error_stats(hw1(img, HUE_SAT, s=0.5)[0], hw1(img, OFFICIAL_HLS, s=0.5)[0])["mae"]
+        self.assertGreater(l_err, s_err,
+                           "L 定义不同((R+G+B)/3 vs (max+min)/2)带来的差异应大于 S 定义的差异")
+
+    def test_hue_shift_is_closer_than_lightness_shift(self):
+        require_cv2(self)
+        img = gradient_image(24, 24)
+        h_err = F._hw1_error_stats(hw1(img, HUE_SAT, h=0.5)[0], hw1(img, OFFICIAL_HLS, h=0.5)[0])["mae"]
+        l_err = F._hw1_error_stats(hw1(img, HUE_SAT, l=0.5)[0], hw1(img, OFFICIAL_HLS, l=0.5)[0])["mae"]
+        self.assertLess(h_err, l_err, "两套色相定义相似(仅量化不同)，差异应小于明度定义差异")
 
 
 if __name__ == "__main__":

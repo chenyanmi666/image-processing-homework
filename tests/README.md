@@ -32,6 +32,10 @@ python -m pytest tests/test_hw1.py -v
 | `TestInputValidation` | `None`、1 维/4 维、通道数 2/5、字符串/object dtype、空数组均抛出带实际 shape/dtype 的 `ValueError`；灰度、单通道、RGBA、bool、[0,1] 与 0-255 浮点输入被正确接受 |
 | `TestModeBranch` | 未知 `mode` / `None` 抛错；亮度/对比度模式忽略色相滑块 |
 | `TestEdgeAndPerformance` | 纯黑/纯白/纯灰/纯红 × 极值滑块、1 像素图、512×512 性能 |
+| `TestOfficialCv2HlsPath` | 官方 `cv2.COLOR_BGR2HLS` 路径：5 个模式统一返回 7 路 uint8；OpenCV 定义 `L=(max+min)/2` 与课件定义 `L=(R+G+B)/3` 数值不同（灰色处重合）；默认参数恒等 `max ≤ 1`（8 位量化）；色相 ±180 周期性、红+180→青、S×(1-1)→灰、L×(1-1)→黑、饱和度单调性 |
+| `TestVibrance` | 进阶③：amount=0 恒等、增益随 S 单调递减且 ≤1+amount、纯色/灰色/纯白完全不动、负 amount 降饱和、随 amount 单调、忽略色相/明度滑杆、结果不同于整体饱和度缩放、通道分解图与结果一致 |
+| `TestPsStyleTone` | 进阶②：b=c=0 严格恒等、黑白端点固定、中灰锚定（±2）、解析中灰斜率与数值微分一致（c 从 -1 到 +1 共 5 档）、**减对比取同强度曲线的反函数**（中灰斜率 1→0.482，正负互为倒数，回归防护"偶函数把减对比变成增对比"）、对比度=1 不把 1/4 灰与 3/4 灰压到端点、亮度为 gamma 幂律且单调、暗部提升多于亮部、标定残差随目标斜率增大且 a ≤ 4、目标斜率 <1 时拟合出负 a（0.8→a<0、0.6 停在上限 -4）、与线性模型 MAE > 10 |
+| `TestCompareExperiment` | 进阶①：`_hw1_abs_diff` 不回绕、同图 PSNR=∞、拼接几何与补白、四联图宽度 = 4W+3×gap、各面板与两路径输出逐像素一致、统计文本含 MAE/PSNR/cv2/p72/量化/模型差异、恒等 MAE ≤ 1、模型差异随参数增大、L 定义差异 > S 定义差异 > 色相差异 |
 
 ### 重要说明
 
@@ -47,7 +51,11 @@ python tests/ui_smoke_hw1.py            # 自动冒烟：启动服务 -> POST /r
 python tests/ui_smoke_hw1.py --serve    # 只启动服务，供人工在浏览器中测试
 ```
 
-- 自动断言：页面可访问、默认参数逐像素恒等、亮度 +0.5、色相 +180°、饱和度 -1、R 通道分解图。
+- 自动断言：页面可访问、默认参数逐像素恒等、亮度 +0.5、色相 +180°、饱和度 -1、R 通道分解图，
+  以及本次扩展的**5 个模式下拉**、**对比实验事件已注册**（4 输入 / 2 输出）、
+  官方 cv2 HLS 的恒等/色相+180/饱和度-1、PS 风格中灰亮度、自然饱和度不改灰色与低饱和增益、
+  对比图 4 联几何、统计文本含 MAE/PSNR/cv2/量化。
+- 端口被占用时脚本**直接报错退出（rc=2）**，避免连到旧服务而产生假通过（阶段 I 踩过）。
 - 服务端输出写入系统临时目录的 `ui_smoke_hw1_server.log`（`--serve` 模式直接打印在控制台）。
 
 ### 为什么本脚本单独注册 hw1 界面
@@ -60,6 +68,29 @@ python tests/ui_smoke_hw1.py --serve    # 只启动服务，供人工在浏览�
 该兼容性问题的结论与待决策项见 `PROJECT_LOG.md` 阶段 F。
 
 仓库根目录另提供双击启动脚本 `start_hw1_demo.bat`（等价于 `python tests/ui_smoke_hw1.py --serve`）。
+
+## 作业1 改动范围契约（作业2~5 不得被改）
+
+```
+python tests/test_hw1_ui_contract.py
+```
+
+- 断言 `UI.py` / `functions.py` 的 **hw2~hw5 函数体与 `main` 基线逐字节一致**、
+  `UI.py` 仍为 GBK+CRLF 无 BOM，且作业1 的 5 个模式与对比实验接线确实存在；
+- 基线文本用 `git show main:UI.py` 现场读取；本机没有 git 或没有 `main` 分支时 SKIP；
+- 该测试**取代**了旧判定标准"`git diff main -- UI.py functions.py` 必须为空"：
+  作业1 扩展必然改动这两个文件的作业1 相关部分，因此判定范围收窄到作业2~5。
+
+## 报告材料生成（作业1）
+
+```
+python reports/hw1/make_report.py
+```
+
+生成 `reports/hw1/` 下的四联对比图、PS 曲线图、自然饱和度增益图、指标表 `metrics.md`、
+自包含 `hw1_report.html` 与 `hw1_report.pdf`（用本机 Edge/Chrome 无头模式打印；
+本机没有浏览器时 PDF 输出 SKIP 并保留 HTML 手动导出）。
+其中 `fig_ui.png` 为无头浏览器截图，**只作视觉证据，不等于人工浏览器验收**。
 
 ## gradio 版本兼容层
 
