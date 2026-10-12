@@ -13,7 +13,7 @@
 | 当前分支 | `feat/image-processing-assignment` |
 | 基线 | `main` = `6dcd9f9148c476f32d2e0af07a3aa6b7ba2bce5f`，tag `template-baseline` |
 | 远程 | `origin` = 上方私有仓库；`main` / 功能分支 / tag 均已推送 |
-| 当前进度 | 阶段 A–G 已完成；作业1 已通过人工验收，完整 web_demo.py 已适配 gradio 3.36.1 可启动（10/10 冒烟），待进入作业2 |
+| 当前进度 | 阶段 A–H 已完成；作业1 已通过人工验收；完整 `web_demo.py` 已适配 gradio 3.36.1 **且前端真正渲染出 5 个页签**（阶段 H 修复了"卡在 Loading"），待进入作业2 |
 | 学号 | `2400013156`（已写入 `web_demo.py` 第 17 行） |
 
 ---
@@ -393,4 +393,122 @@ UI smoke (full app): 10/10 PASS
 ### 下一步
 
 - 用户人工验证完整页面：`python web_demo.py` → <http://127.0.0.1:8088/>（先关闭占用该端口的服务）。
+- 通过后进入作业2 `function_hw2`。
+
+---
+
+## 阶段 H · 完整页面"卡在 Loading"根因修复（2026-10-12）
+
+**触发**：用户人工打开 <http://127.0.0.1:8088/> 后，浏览器**一直停在 Gradio 的 "Loading..." 页面**，
+五个作业页签完全没渲染出来。→ 阶段 G 的"10/10 冒烟"**不能代表验收通过**，据此推翻此前判断。
+
+### H1 · 现象与复现（三件事必须分开）
+
+| 检查 | 修复前观测 | 说明 |
+| --- | --- | --- |
+| `GET /` | **200，71423 bytes** | 只证明 HTTP 层正常 |
+| `GET /config` | **内容完整**（5 个页签 label 齐全、image 组件齐全） | 只证明服务端配置正常 |
+| **浏览器真实渲染** | **只有页脚 + spinner + "Loading..."** | 真正的判据（截图 `C:\temp\shot_before.png`） |
+
+复现方式：`msedge --headless=new ... --screenshot=...` 与 `--dump-dom`（见 H4）。
+修前 DOM 特征：`<p class="loading svelte-zlszon">Loading...</p>` 且主容器
+`<div class="contain" style="flex-grow: 1;"></div>` **为空**。
+
+### H2 · 根因（源码级，非猜测）
+
+gradio 3.x 用**类名**推导前端组件名：`Component.get_block_name()` →
+`camelcase_to_snakecase(cls.__name__)`。阶段 G 的兼容层把子类命名为 `ImageEditor`，
+于是 `/config` 里该组件 `type` 变成 **`"imageeditor"`**，而 3.36.1 前端 `component_map`
+中只有 `"image"` → 前端找不到组件 → 渲染中断 → 整页停在 Loading（服务端毫无异常）。
+
+实测证据（修复前）：
+
+```
+$ python -c "import gradio_compat, gradio as gr; gradio_compat.install(); ..."
+ImageEditor block_name: imageeditor      # 前端不认识这个名字
+Image block_name: image
+$ # 运行中服务的 /config
+imageeditor | tool= sketch               # 唯一的非 image 组件就是它
+```
+
+**区分点**：`tool="sketch"`（组件能力）与组件 `type`（前端组件名）是两回事，
+阶段 G 只验证了前者，漏掉了后者 —— 这是本次阻塞的成因。
+
+### H3 · 最小修复
+
+在 `gradio_compat.ImageEditor` 上覆盖一个类方法（**其余代码零改动**）：
+
+```python
+@classmethod
+def get_block_name(cls):
+    """向 gradio 声明本组件应作为内置 image 渲染（否则前端不认识 imageeditor）。"""
+    return "image"
+```
+
+- 前端随即按内置 `Image` 组件渲染，`tool="sketch"` 仍是画笔/橡皮编辑器，语义不变。
+- 不升级 gradio、不改 `UI.py` / `functions.py`、不动模板基线。
+
+### H4 · 修复后证据（真实渲染，非 HTTP 状态）
+
+| 项 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `/config` 中带 `tool` 的组件 `type` | `imageeditor` + `image` | **全部 `image`（17 个）** |
+| headless 截图 | 仅页脚 + "Loading..."（`C:\temp\shot_before.png`） | **5 个页签 + 作业1 完整界面**（`C:\temp\shot_after.png`） |
+| dump-dom 可见文本（已剥离内嵌 config） | 无页签、无组件节点 | 含 5 个页签、`输入图像`/`输出图像`/`模式`…、`data-testid="image"`、`component-N` |
+
+### H5 · 新增可重复的前端渲染测试
+
+`tests/test_frontend_render.py`（用法见 `tests/README.md`）：
+启动真实 `web_demo.main()` → 用无头 Edge/Chrome 执行页面 JS → **剥离内嵌
+`window.gradio_config` 后**断言页签文案真的渲染出来、且不存在 `Loading...` 遮罩；
+另断言 `/config` 中编辑器组件 `type` 全为 `image`（防"回退成前端不认识的名字"）。
+本机无浏览器时输出 SKIP 并提示人工验收（不算失败）。
+
+### H6 · 测试结果（本轮实际输出）
+
+| 项目 | 命令 | 结果 |
+| --- | --- | --- |
+| **前端真实渲染（新增）** | `python tests/test_frontend_render.py --port 8091` | **13/13 PASS**（DOM 108624 bytes） |
+| 全量单元测试 | `python -m unittest discover -s tests -v` | **65 tests OK** |
+| 作业1 数组层 | `python tests/test_hw1.py` | **46/46 OK**（0.102 s） |
+| 兼容层单元 | `python tests/test_gradio_compat.py` | **19/19 PASS** |
+| 完整程序启动冒烟 | `python tests/ui_smoke_web_demo.py --port 8090` | **10/10 PASS**（71423 bytes） |
+
+前端渲染测试输出（实测节选）：
+
+```
+浏览器：C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+启动方式：python -c <bootstrap>（调用真实 web_demo.main()，端口 8091）
+[PASS] /config 编辑器组件 type 全为 image -> types=['image']
+[PASS] 抓到渲染后的 DOM -> rc=0 bytes=108624
+[PASS] 剥离内嵌 config 后仍见页面标题
+[PASS] 渲染结果含页签：作业1 / 作业2 / 作业3 / 作业4 / 作业5（5 项）
+[PASS] 不再停留 Loading 遮罩 -> 可见文本长度=681
+[PASS] 作业1 页签内容已渲染
+[PASS] 图像组件节点已生成
+[PASS] 渲染节点 component-N 已生成
+前端渲染测试：13/13 PASS
+```
+
+### H7 · 排障中踩到的坑（供后续复用）
+
+1. Edge 154 **已移除 old headless**：`--headless` + `--dump-dom` 返回 **0 字节**，必须 `--headless=new`。
+2. `msedge.exe` 是**分离启动器**：用 `cmd >` 重定向时句柄可能被浏览器进程持有、命令返回时输出尚未落盘
+   → 需**独立进程启动 + 之后单独读取**，或在 Python 里 `subprocess.run(stdout=file)`。
+3. 自写同步 CDP 客户端（websocket-client）在本机出现 `recv()` 不返回、进程挂死 → **弃用**；
+   若要读前端 console 错误，建议改用 playwright（本机未安装）。
+4. `--screenshot` 是最快的"人眼级"证据：**修前只显示页脚 + `Loading...`，修后 5 个页签齐全**。
+
+### H8 · 诚实声明
+
+- 本机**未安装** playwright / selenium（实测 `importlib.util.find_spec` 均为 False），
+  前端验证使用 Edge headless（截图 + dump-dom），**不是**成熟浏览器自动化框架。
+- 自动化能证明"5 个页签渲染出来、无 Loading 遮罩、组件节点存在"，
+  但**交互行为**（hw1 的滑块/模式切换、hw3 的画笔与清空、插值下拉）仍需用户在本机浏览器人工确认。
+- 阶段 G 的"10/10 冒烟"本身无误，但其**适用边界被修正**为"服务端起得来、页签与编辑器类型正确"，
+  不再视为完整程序可用性的依据；历史结论按约定保留、不抹除。
+
+### 下一步
+
+- 用户**强制刷新**浏览器（Ctrl+Shift+R，避开旧缓存）后人工验收五个页签。
 - 通过后进入作业2 `function_hw2`。
