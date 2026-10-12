@@ -1,27 +1,5 @@
 # -*- coding: utf-8 -*-
-"""为 gradio 3.x 补上 UI.py 所需的 4.x 组件（ImageEditor / Brush）的最小兼容层。
-
-背景
-----
-课程模板 ``UI.py`` 的 ``create_demo_hw3`` 使用 ``gr.ImageEditor`` 与 ``gr.Brush``，
-这两个 API 自 gradio 4.x 起才提供；本机 gradio 3.36.1 没有它们，导致
-``python web_demo.py`` 启动即 ``AttributeError: module 'gradio' has no attribute 'ImageEditor'``。
-
-设计原则
---------
-1. **不动模板**：``UI.py`` 与 ``functions.py`` 保持字节级原样，改动只落在
-   ``web_demo.py``（入口，2 行）与本模块（新增文件）。
-2. **幂等 + 可退化**：gradio 已自带 ``ImageEditor``（>=4.x）时 ``install()`` 什么也不做，
-   升级 gradio 后本模块自动失效，无需删代码。
-3. **只补模板真正用到的语义**，不伪造能力；差异见 ``LIMITATIONS``。
-
-用法
-----
-在构建任何界面之前调用一次（``web_demo.py`` 顶部已调用）::
-
-    import gradio_compat
-    gradio_compat.install()
-"""
+"""为 Gradio 3.x 提供模板需要的 ImageEditor 和 Brush；已有官方组件时不替换。"""
 from __future__ import annotations
 
 import gradio as gr
@@ -49,27 +27,14 @@ class Brush:
 
 
 class ImageEditor(gr.Image):
-    """3.x 下用 ``gr.Image(tool="sketch")`` 模拟 ``gr.ImageEditor`` 的输入/输出契约。
-
-    ``preprocess`` 返回 gradio 4.x 风格的字典
-    ``{"background": 原图, "layers": [mask], "composite": 合成图}``，
-    因此 ``UI.py`` / ``functions.py`` 的既有写法（如 ``bg_image["background"]``、
-    ``bg_image["layers"][0][:, :, 0]``）无需任何修改。
-    """
+    """用 Gradio 3.x 的 sketch 组件适配 ImageEditor 的字典输入。"""
 
     _VALID_SOURCES = ("upload", "webcam", "canvas")
     _DEFAULT_COLOR = (255, 0, 0)
 
     @classmethod
     def get_block_name(cls):
-        """**关键**：向 gradio 声明本组件应作为内置 `image` 渲染。
-
-        gradio 3.x 用类名推导前端组件名（`camelcase_to_snakecase(cls.__name__)`）。
-        若不覆盖本方法，子类名 `ImageEditor` 会让 `/config` 里出现
-        `type: "imageeditor"`，而前端 `component_map` 中并无该名字 ——
-        后果是前端渲染报错、**整页停在 Loading**（HTTP 200 与 /config 正常都掩盖不了）。
-        因此这里显式返回 `image`，实际行为仍是 3.x 的 sketch 编辑器（画笔 + 橡皮）。
-        """
+        """使用前端内置 image 类型渲染。"""
         return "image"
 
     def __init__(

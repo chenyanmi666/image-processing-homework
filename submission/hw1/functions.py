@@ -2,17 +2,7 @@
 import numpy as np
 import gradio as gr
 
-# ---------------------------------------------------------------------------
-# Gradio 版本兼容层
-# 本机 gradio 3.36.1 的 gr.Error 签名为 (message)，不接受 duration 参数，
-# 而本文件 function_hw1~hw5 统一写作 gr.Error(msg, duration=5)，
-# 会在空输入时抛出 TypeError，界面得不到友好提示。
-# 这里把本模块内的 gr 名称指向一个轻量代理：只接管 Error 的构造，
-# 支持 duration 的版本原样透传，不支持的版本退化为单参数构造；
-# 其余属性（Blocks、Image 等）全部原样转发给真实 gradio。
-# 因此 function_hw2~hw5 的业务代码无需任何改动，
-# 也不会修改 gradio 模块本身（UI.py、web_demo.py 里的 gr 不受影响）。
-# ---------------------------------------------------------------------------
+# 兼容旧版 Gradio 的 Error 参数。
 _gr_module = gr
 
 
@@ -32,17 +22,7 @@ gr = _GradioCompat()
 
 
 def _hw1_rgb_to_hsi(rgb):
-    """RGB 转 HSI（课件 p66-p84 定义）。
-
-    输入 rgb: float 数组，值域 [0,1]，形状 (H, W, 3)，通道顺序 R, G, B。
-    输出 (H, W, 3)：H 单位为度、范围 [0,360)；S、I 范围 [0,1]。
-      I = (R + G + B) / 3
-      S = 1 - 3 * min(R,G,B) / (R + G + B)
-      H = theta           (B <= G)
-      H = 360 - theta     (B > G)
-      theta = arccos{ [(R-G)+(R-B)] / (2*sqrt((R-G)^2 + (R-B)*(G-B))) } * 180/pi
-    退化情况（纯黑 R+G+B=0、灰色 den=0）S 与 H 均取 0，避免除零。
-    """
+    """RGB [0,1] 转课件 HSI；H 为角度，S、I 为 [0,1]。"""
     r = rgb[:, :, 0]
     g = rgb[:, :, 1]
     b = rgb[:, :, 2]
@@ -69,19 +49,7 @@ def _hw1_rgb_to_hsi(rgb):
 
 
 def _hw1_hsi_to_rgb(hsi):
-    """HSI 转 RGB（课件 p78 分段逆变换）。
-
-    输入/输出值域均为 [0,1]，H 以度为单位（先取模到 [0,360)）。
-    三段公式：
-      0   <= H < 120 : B = I(1-S), R = I[1 + S*cosH / cos(60-H)],  G = 3I-(R+B)
-      120 <= H < 240 : R = I(1-S), G = I[1 + S*cosH'/cos(60-H')], B = 3I-(R+G), H' = H-120
-      240 <= H < 360 : G = I(1-S), B = I[1 + S*cosH'/cos(60-H')], R = 3I-(G+B), H' = H-240
-
-    实现要点：每一段只对该段内的像素求值（布尔掩码索引），
-    不再对全图套用三段公式后用 np.where 选择结果。
-    这样可避免在无效分段上出现 cos(60-H') 趋近 0 而造成的除零/无穷大中间量。
-    结果裁剪到 [0,1]；裁剪会改变实际 H/S/I，这是 RGB 立方体外的定义域限制。
-    """
+    """按三个 120 度扇区将 HSI 转为 RGB，超出色域的结果裁剪。"""
     h = np.mod(np.asarray(hsi[:, :, 0], dtype=np.float64), 360.0)
     s = np.clip(np.asarray(hsi[:, :, 1], dtype=np.float64), 0.0, 1.0)
     i = np.clip(np.asarray(hsi[:, :, 2], dtype=np.float64), 0.0, 1.0)
@@ -136,19 +104,8 @@ def _hw1_hsi_to_rgb(hsi):
     return np.clip(np.dstack([r, g, b]), 0.0, 1.0)
 
 
-
 def _hw1_as_float_rgb(input_image):
-    """把传入的图像规整为 float RGB 数组。
-
-    返回 shape (H, W, 3)、dtype float64、值域 [0,1] 的数组（通道顺序 R, G, B）。
-    非法输入抛出 ValueError，消息中给出实际的 shape/dtype，
-    避免调用方在后续索引、广播时遇到难以定位的异常。
-
-    接受的输入：
-      - 2 维灰度图，或 3 维 (H, W, 1) / (H, W, 3) / (H, W, 4)
-      - 元素类型为 bool、整数或浮点（数值类型）
-      - 浮点输入最大值不超过 1 时按 [0,1] 处理，超过 1 时按 0-255 量程处理
-    """
+    """将灰度、RGB 或 RGBA 输入转换为 [0,1] 的浮点 RGB。"""
     if input_image is None:
         raise ValueError("输入图像为空（None）")
 
@@ -191,18 +148,8 @@ def _hw1_as_float_rgb(input_image):
     return np.clip(img.astype(np.float64), 0.0, 255.0) / 255.0
 
 
-# ---------------------------------------------------------------------------
-# 作业1 进阶①：官方 OpenCV HLS 路径（对应作业要求的基本档：直接调用 cv2.cvtColor）
-#
-# 重要说明：OpenCV 的 COLOR_BGR2HLS 用的是 HLS 模型
-#   L = (max + min) / 2、S = (max - min) / (max + min)（8 位图 H 折半为 [0,180]），
-# 与课件 p72-p78 的 HSL(HSI)（L = (R+G+B)/3、S = 1 - 3*min(R,G,B)/(R+G+B)）
-# **不是同一个数学模型**。本函数按作业原文的 BGR 语义调用：
-#   RGB -> BGR -> cv2.COLOR_BGR2HLS。
-# ---------------------------------------------------------------------------
-
 def _hw1_require_cv2():
-    """按需导入 OpenCV；缺失时给出可读提示，不影响其它模式。"""
+    """按需导入 OpenCV，缺失时提示用户。"""
     try:
         import cv2
     except ImportError as exc:  # pragma: no cover - 取决于运行环境
@@ -211,12 +158,7 @@ def _hw1_require_cv2():
 
 
 def _hw1_rgb_to_hls_opencv(rgb):
-    """RGB(float, [0,1]) -> OpenCV HLS，返回 (H 度, S, L)，形状 (H, W, 3)。
-
-    输入先量化成 8 位 BGR 再调用 cv2.COLOR_BGR2HLS；
-    OpenCV 的 HLS 通道顺序是 H, L, S，这里统一整理为 (H, S, L)。
-    该函数含 8 位量化，因此往返不是无损的，量化误差在对比实验中单独统计。
-    """
+    """RGB 转 OpenCV HLS，返回顺序统一为 H（度）、S、L。"""
     cv2 = _hw1_require_cv2()
     rgb_clip = np.clip(np.asarray(rgb, dtype=np.float64), 0.0, 1.0)
     bgr = np.ascontiguousarray(np.rint(rgb_clip * 255.0)[:, :, ::-1].astype(np.uint8))
@@ -228,7 +170,7 @@ def _hw1_rgb_to_hls_opencv(rgb):
 
 
 def _hw1_hls_opencv_to_rgb(hls):
-    """OpenCV HLS((H 度, S, L)) -> RGB(float, [0,1])，经 8 位量化。"""
+    """H（度）、S、L 转为 RGB；OpenCV 路径使用 8 位量化。"""
     cv2 = _hw1_require_cv2()
     h = np.mod(np.asarray(hls[:, :, 0], dtype=np.float64), 360.0)
     s = np.clip(np.asarray(hls[:, :, 1], dtype=np.float64), 0.0, 1.0)
@@ -241,7 +183,7 @@ def _hw1_hls_opencv_to_rgb(hls):
 
 
 def _hw1_adjust_in_hsi(img_f, h_slider, s_slider, l_slider):
-    """手写路径：在课件的 HSL(HSI) 空间分别调整色相/饱和度/明度，再逆变换回 RGB。"""
+    """在课件 HSI 空间调整色相、饱和度和明度。"""
     hsi = _hw1_rgb_to_hsi(img_f)
     h_new = np.mod(hsi[:, :, 0] + float(h_slider) * 180.0, 360.0)       # 色相平移：[-1,1] 对应正负 180 度
     s_new = np.clip(hsi[:, :, 1] * (1.0 + float(s_slider)), 0.0, 1.0)   # 饱和度按比例缩放
@@ -250,11 +192,7 @@ def _hw1_adjust_in_hsi(img_f, h_slider, s_slider, l_slider):
 
 
 def _hw1_adjust_in_hls_opencv(img_f, h_slider, s_slider, l_slider):
-    """官方路径：在 OpenCV 的 HLS 空间做与手写路径**语义相同**的调整。
-
-    语义对齐（便于对比实验）：色相平移 ±180 度、饱和度 ×(1+s)、亮度 ×(1+l)；
-    但由于两个空间的 H/S/L 数学定义不同，结果不会逐一相等。
-    """
+    """在 OpenCV HLS 空间应用相同的滑杆参数。"""
     hls = _hw1_rgb_to_hls_opencv(img_f)
     h_new = np.mod(hls[:, :, 0] + float(h_slider) * 180.0, 360.0)
     s_new = np.clip(hls[:, :, 1] * (1.0 + float(s_slider)), 0.0, 1.0)
@@ -263,45 +201,10 @@ def _hw1_adjust_in_hls_opencv(img_f, h_slider, s_slider, l_slider):
 
 
 def _hw1_apply_vibrance(sat, amount):
-    """进阶③：Photoshop 风格的自然饱和度（vibrance）。
-
-    Photoshop 的"自然饱和度"优先提升**本来不鲜艳**的颜色，对已接近纯色的像素几乎不动
-    （保护高饱和区域，避免溢出与假色）。这里用增益衰减模型实现：
-
-        gain(S) = 1 + amount * (1 - S)^2 ，  S' = clip(S * gain, 0, 1)
-
-      - S = 1（纯色）：gain = 1，完全不动；
-      - S 越小增益越大，中间饱和度处提升最明显；
-      - 灰色的 S 本身为 0，输出仍为 0（不会被染色）。
-
-    amount ∈ [-1, 1]，0 为恒等；amount < 0 表示降低自然饱和度。
-
-    诚实声明：该增益衰减模型是本作业**自行设计**的近似算法（借鉴"越不鲜艳提升越多"的
-    定性行为），**没有**使用真实 Photoshop 输出数据做任何拟合，也未与 PS 的实际输出比对，
-    因此只能说"PS 风格"，不能说"复刻 Photoshop"或"与 PS 一致"。
-    """
+    """自然饱和度近似：S' = S * [1 + amount * (1-S)^2]。"""
     s = np.clip(np.asarray(sat, dtype=np.float64), 0.0, 1.0)
     gain = 1.0 + float(np.clip(amount, -1.0, 1.0)) * (1.0 - s) ** 2
     return np.clip(s * gain, 0.0, 1.0)
-# ---------------------------------------------------------------------------
-# 作业1 进阶②：Photoshop 风格的亮度 / 对比度（非线性、中灰锚定）
-#
-# Photoshop（CS3 以后）的"亮度/对比度"不是线性模型：
-#   - 对比度是 S 形曲线：中灰 0.5 不动、黑白端点不动，正向变陡、负向把曲线压平；
-#   - 亮度是非线性的：中灰附近变化大、黑白端点基本不动（不直接裁剪高光/阴影）。
-# 本实现用 tanh 构造 S 曲线、用 gamma 构造亮度，端点与中灰的锚定可解析验证。
-#
-# 诚实声明（必须分清三种不同的东西）：
-#   1) "亮度/对比度 (PS风格)"：本作业**自行设计**的模拟（tanh S 曲线 + gamma 亮度），
-#      数学性质可解析验证，但**没有**用真实 Photoshop 输出数据做参数拟合；
-#   2) "自然饱和度 (PS vibrance)"：本作业**自行设计**的近似模型
-#      gain(S)=1+amount*(1-S)^2，同样**没有**用真实 Photoshop 输出数据拟合；
-#   3) "用真实 Photoshop 输出数据拟合"这件事本作业**未做**（本机未安装 Photoshop，
-#      也没有 PS 参考输出），因此任何地方都不得写成"复刻 PS""拟合 PS""与 PS 一致"。
-# 参数标定实验（_hw1_ps_fit_contrast_a）度量的是"本实现的 S 曲线 vs 同斜率线性斜坡"，
-# 属于本实现内部的实验，不是与 Photoshop 的比对；行为验证见 tests/test_hw1.py 的
-# TestPsStyleTone 与 TestVibrance。
-# ---------------------------------------------------------------------------
 _HW1_PS_CONTRAST_A_MAX = 4.0
 
 
@@ -311,16 +214,7 @@ def _hw1_ps_contrast_a(contrast):
 
 
 def _hw1_ps_s_curve(x, a):
-    """中灰锚定的 S 曲线：0->0、0.5->0.5、1->1，端点与中灰都不动。
-
-    a > 0（增对比）：y = 0.5 + 0.5*tanh(a*(x-0.5))/tanh(a/2)，中灰斜率 = 0.5a/tanh(a/2) > 1；
-    a < 0（减对比）：取**同强度正曲线的反函数**
-        y = 0.5 + artanh((2x-1)*tanh(k/2))/k，k = |a|
-      中灰斜率 = 2*tanh(k/2)/k < 1，即真正把曲线压平。
-
-    注意：直接往上面那条公式里代入 a<0 是**错误的**——该式对 a 是偶函数
-    （分子分母同时变号），会得到与 a>0 完全相同的曲线，使"减对比"变成"增对比"。
-    """
+    """正对比度使用 tanh 曲线，负对比度使用其反函数；固定黑白与中灰。"""
     x = np.clip(np.asarray(x, dtype=np.float64), 0.0, 1.0)
     a = float(a)
     if abs(a) < 1e-9:
@@ -333,7 +227,7 @@ def _hw1_ps_s_curve(x, a):
 
 
 def _hw1_ps_mid_slope(contrast):
-    """S 曲线中灰处的斜率（解析式）：a>0 为 0.5a/tanh(a/2)，a<0 为 2*tanh(k/2)/k，两者互为倒数。"""
+    """计算对比度曲线在中灰处的斜率。"""
     a = _hw1_ps_contrast_a(contrast)
     if abs(a) < 1e-9:
         return 1.0
@@ -351,12 +245,7 @@ def _hw1_ps_brightness_contrast(img_f, brightness, contrast):
 
 
 def _hw1_ps_fit_contrast_a(target_slope, samples=256, coarse=401, refine=40):
-    """标定实验：最小二乘求 a，使 S 曲线最接近"同一中灰斜率"的线性斜坡。
-
-    目标曲线 y_t(x) = clip(0.5 + (x - 0.5) * target_slope)，x 取 256 个灰度级；
-    在 a ∈ [-4, 4] 上先粗扫再三分细化（a<0 对应减对比，中灰斜率 < 1）。
-    返回 (a_fit, rms_error, max_error)，残差用于报告"S 曲线偏离线性的程度"。
-    """
+    """用最小二乘标定自定义线性目标的曲线参数，返回参数及误差。"""
     x = np.linspace(0.0, 1.0, int(samples))
     y_t = np.clip(0.5 + (x - 0.5) * float(target_slope), 0.0, 1.0)
 
@@ -380,9 +269,6 @@ def _hw1_ps_fit_contrast_a(target_slope, samples=256, coarse=401, refine=40):
     a_fit = 0.5 * (lo_b + hi_b)
     rms_err, max_err = residual(a_fit)
     return a_fit, rms_err, max_err
-# ---------------------------------------------------------------------------
-# 作业1 进阶①（实验部分）：手写 HSL(课件定义) vs 官方 cv2.COLOR_BGR2HLS
-# ---------------------------------------------------------------------------
 
 def _hw1_to_uint8(img_f):
     """float [0,1] -> uint8 [0,255]（四舍五入）。"""
@@ -394,29 +280,18 @@ def _hw1_abs_diff(a_u8, b_u8):
     return np.abs(a_u8.astype(np.int16) - b_u8.astype(np.int16))
 
 
-# 饱和度低于该值的像素色相在数值上不稳定（灰/近灰/极暗），统计时单列口径。
 _HW1_HUE_MEANINGFUL_S_MIN = 0.10
 
 
 def _hw1_hue_angle_delta(h1_deg, h2_deg):
-    """色相 H 在圆周上的最短角距离（度，取值范围 [0, 180]）。
-
-    色相是**角度量**（周期 360°），直接做 abs(H1 - H2) 是错的：
-    359° 与 1° 只差 2°，不是 358°。这里按最短圆弧计算：
-        d = |H1 - H2| mod 360，再取 min(d, 360 - d)。
-    """
+    """计算周期为 360 度的最短角距离，结果为 [0,180]。"""
     delta = np.abs(np.mod(np.asarray(h1_deg, dtype=np.float64), 360.0)
                    - np.mod(np.asarray(h2_deg, dtype=np.float64), 360.0))
     return np.minimum(delta, 360.0 - delta)
 
 
 def _hw1_difference_vis(a_u8, b_u8, gain=5):
-    """差异可视化：|a - b| × gain 后饱和到 [0, 255]。
-
-    放大在 int32 里做，避免整数回绕：gain=5 时中间值最大 255×5=1275，已超出
-    uint8；若直接在 uint8 上相乘会按 256 取模（255×5→251、60×5→44），
-    得到与真实差异无关的灰度。
-    """
+    """用 int32 放大绝对差，避免溢出，再裁剪为 uint8。"""
     scaled = _hw1_abs_diff(a_u8, b_u8).astype(np.int32) * int(gain)
     return np.clip(scaled, 0, 255).astype(np.uint8)
 
@@ -452,20 +327,7 @@ def _hw1_side_by_side(panels, gap=4, gap_value=255):
         strips.append(p)
     return np.hstack(strips)
 def function_hw1_compare(input_image, h_slider, s_slider, l_slider):
-    """进阶①：手写 HSL（课件 p72-p78）与官方 cv2.COLOR_BGR2HLS 的对比实验。
-
-    同一组滑杆参数分别走两条路径，返回 (对比图, 统计文本)：
-      对比图：原图 | 手写(课件定义) | 官方 cv2 HLS | 差异 ×5 放大
-              （差异面板按 |Δ|×5 放大，放大在 int32 内完成后再裁剪到 255，不会发生 uint8 回绕）
-      统计文本：最终 RGB 输出层面的 MAE / 最大误差 / PSNR / 逐通道 MAE；
-                换算到同一测量空间（cv2 HLS）后的 H/S/L 偏差
-                （H 是角度量，按**圆周最短弧**统计，并单列"双方饱和度均 >= 0.10
-                 的像素"这一可解释口径，以避开灰/近灰像素色相不稳定的干扰）；
-                以及两条路径各自"原图 -> 空间 -> 原图"的量化往返误差。
-
-    目的是把**数学模型差异**（两套 L/S 定义不同）与**8 位量化误差**分开报告，
-    避免仅凭通道数值判定"谁更准确"。
-    """
+    """返回两条路径的四联对比图及误差统计，分别报告模型差异和量化误差。"""
     if input_image is None:
         raise gr.Error('输入错误：在处理之前请先输入一张图像', duration=5)
 
@@ -480,12 +342,9 @@ def function_hw1_compare(input_image, h_slider, s_slider, l_slider):
 
     m_hls = _hw1_rgb_to_hls_opencv(manual.astype(np.float64) / 255.0)
     o_hls = _hw1_rgb_to_hls_opencv(official.astype(np.float64) / 255.0)
-    # 色相是角度量：必须按圆周最短弧统计（359° 与 1° 相差 2°，不是 358°）。
     h_delta = _hw1_hue_angle_delta(m_hls[:, :, 0], o_hls[:, :, 0])
     h_diff = float(h_delta.mean())
     h_diff_max = float(h_delta.max())
-    # 灰/近灰像素（S -> 0）的色相在数值上不稳定：8 位量化或极小的 RGB 差异都可能让 H 大幅跳动，
-    # 因此额外统计"双方饱和度都不低于 _HW1_HUE_MEANINGFUL_S_MIN"的像素作为可解释口径。
     sat_meaningful = np.minimum(m_hls[:, :, 1], o_hls[:, :, 1]) >= _HW1_HUE_MEANINGFUL_S_MIN
     h_diff_colored = (float(h_delta[sat_meaningful].mean())
                       if bool(sat_meaningful.any()) else float("nan"))
@@ -544,21 +403,16 @@ def function_hw1(input_image, mode, h_slider, s_slider, l_slider, brightness, co
     img_f = _hw1_as_float_rgb(input_image)
 
     if mode == "色相/饱和度":
-        # 基础实现：手写转换，在课件定义的 HSL(HSI) 空间里分别调整 H / S / L
         out_f = _hw1_adjust_in_hsi(img_f, h_slider, s_slider, l_slider)
     elif mode == "色相/饱和度 (官方cv2 HLS)":
-        # 基本实现：直接调用 cv2.COLOR_BGR2HLS，在 OpenCV 的 HLS（L=(max+min)/2）里调整
         out_f = _hw1_adjust_in_hls_opencv(img_f, h_slider, s_slider, l_slider)
     elif mode == "自然饱和度 (PS vibrance)":
-        # 进阶③：PS 风格的自然饱和度（使用饱和度滑杆作为强度，忽略色相/明度滑杆）
         hsi = _hw1_rgb_to_hsi(img_f)
         s_new = _hw1_apply_vibrance(hsi[:, :, 1], s_slider)
         out_f = _hw1_hsi_to_rgb(np.dstack([hsi[:, :, 0], s_new, hsi[:, :, 2]]))
     elif mode == "亮度/对比度":
-        # 自定义线性模型（不是 Photoshop 拟合），先对比度后亮度
         out_f = np.clip((img_f - 0.5) * (1.0 + float(contrast)) + 0.5 + float(brightness), 0.0, 1.0)
     elif mode == "亮度/对比度 (PS风格)":
-        # 进阶②：PS 风格非线性模型（中灰锚定、端点不裁剪、S 形对比度 + gamma 亮度）
         out_f = _hw1_ps_brightness_contrast(img_f, brightness, contrast)
     else:
         raise gr.Error(
@@ -568,7 +422,6 @@ def function_hw1(input_image, mode, h_slider, s_slider, l_slider, brightness, co
 
     output_image = np.clip(np.rint(out_f * 255.0), 0.0, 255.0).astype(np.uint8)
 
-    # 7 路输出中的通道分解图，均取自处理后的结果
     out_hsi = _hw1_rgb_to_hsi(output_image.astype(np.float64) / 255.0)
     r_channel = output_image[:, :, 0]
     g_channel = output_image[:, :, 1]

@@ -7,22 +7,7 @@ import gradio as gr
 import numpy as np
 
 def create_demo_hw1(process, process_compare=None):
-    """作业一界面（图像色相/饱和度/亮度/对比度调整工具）。
-
-    模式共 5 种：
-      色相/饱和度                ：手写 HSL(HSI)，按课件 p72-p78 的数学定义
-      色相/饱和度 (官方cv2 HLS)  ：直接调用 cv2.COLOR_BGR2HLS（L=(max+min)/2）
-      自然饱和度 (PS vibrance)   ：本作业自行设计的近似算法（复用"饱和度"滑杆作为强度）
-      亮度/对比度                ：自定义线性模型
-      亮度/对比度 (PS风格)       ：本作业自行设计的非线性模拟（S 曲线 + gamma 亮度）
-
-    诚实说明：上面两项"PS 风格"功能都是**自行设计**的模型，没有使用真实 Photoshop
-    输出数据做拟合，也没有与 Photoshop 的实际输出逐像素比对（本机未安装 Photoshop）；
-    具体算法、实验依据与局限见 reports/hw1/hw1_report.pdf 第 5、6、8 节。
-
-    process_compare 为可选的"进阶①：手写 vs 官方 cv2 HLS 对比实验"函数；
-    传入时界面多出对比按钮与结果区，不传时界面与模板行为一致。
-    """
+    """作业1界面：五种调整模式，可选手写与 OpenCV 对比实验。"""
     with gr.Blocks() as demo:
         gr.Markdown("## 作业一: 图像色相/饱和度/亮度/对比度调整工具")
         gr.Markdown("说明：手写路径按课件 p72-p78 的 HSL(HSI) 定义"
