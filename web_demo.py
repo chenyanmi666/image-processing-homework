@@ -3,6 +3,10 @@ from __future__ import annotations
 import argparse
 import pathlib
 import gradio as gr
+import gradio_compat
+
+gradio_compat.install()  # gradio 3.x -> 4.x API shim (see gradio_compat.py)
+
 from UI import *
 from functions import *
 
