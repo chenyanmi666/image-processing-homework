@@ -52,6 +52,9 @@
 - 允许修改：`function_hw1` 及其专用辅助函数。
 - **不得修改 `function_hw2` ~ `function_hw5` 的业务逻辑**（签名、返回值结构、既有实现）。
 - 未经明确指令，不修改 `UI.py` / `web_demo.py` 的业务逻辑。
+- **gradio 版本兼容**由 `gradio_compat.py` 承担（`web_demo.py` 顶部调用一次）：该模块只为 3.x 缺失的 4.x 组件（`ImageEditor` / `Brush`）提供等价语义，gradio ≥ 4 时自动失效、不做任何事。
+  修复 gradio 版本问题的**禁止做法**：直接改写 `UI.py` 的组件写法、或用降级/升级全局 gradio 环境来规避。
+  判定标准：`git diff main -- UI.py functions.py` 必须为空（模板基线字节保真）。
 
 ## 6. 测试与报告真实性（强制）
 

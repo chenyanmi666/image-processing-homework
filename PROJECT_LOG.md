@@ -13,7 +13,7 @@
 | 当前分支 | `feat/image-processing-assignment` |
 | 基线 | `main` = `6dcd9f9148c476f32d2e0af07a3aa6b7ba2bce5f`，tag `template-baseline` |
 | 远程 | `origin` = 上方私有仓库；`main` / 功能分支 / tag 均已推送 |
-| 当前进度 | 阶段 A–F 已完成；作业1 已实现，数组层 46/46 PASS、界面层 API 实测通过，待人工浏览器实测 |
+| 当前进度 | 阶段 A–G 已完成；作业1 已通过人工验收，完整 web_demo.py 已适配 gradio 3.36.1 可启动（10/10 冒烟），待进入作业2 |
 | 学号 | `2400013156`（已写入 `web_demo.py` 第 17 行） |
 
 ---
@@ -308,3 +308,89 @@
 - 通过后再进入作业2 `function_hw2`。
 - **待用户决策**：完整 `web_demo.py` 的 gradio 版本问题
   （升级 gradio 4.x / 本地临时替换 hw3 组件 / 保持现状只做单页实测）。
+---
+
+## 阶段 G · 完整 web_demo.py 的 gradio 版本兼容修复（2026-10-12）
+
+**触发**：用户在浏览器完成作业1 人工测试（色相/饱和度/明度、亮度/对比度两种模式均正常，
+七路输出正常），ChatGPT 同意作业1 通过当前阶段验收；要求优先解决"完整 `web_demo.py`
+因 gradio 版本不兼容无法启动"，且**改动范围最小、对其他作业影响最小、不得破坏原始模板基线**。
+
+### G1 · 根因（复核确认）
+
+- `UI.py:85` 的 `create_demo_hw3` 使用 `gr.ImageEditor`（第 85 行）与 `gr.Brush`（第 86 行），
+  二者均为 **gradio 4.x** 组件；本机 gradio **3.36.1** 中不存在
+  （实测 `hasattr(gr, "ImageEditor") is False`、`hasattr(gr, "Brush") is False`）。
+- 结果：`python web_demo.py` 在构建界面时即 `AttributeError`、rc=1，**任何页面都打不开**。
+- 连带发现（3.36.1 的既存事实，非本次引入，**未改动**）：`gr.Image` 的参数是**单数** `source`
+  （合法值仅 `upload`/`webcam`/`canvas`），模板中 5 处 `sources=[...]` 会被 `**kwargs` 吞掉并发出
+  `GradioUnusedKwargWarning` → 3.x 下实际只有"上传"通道生效（webcam/clipboard 无效）。
+
+### G2 · 方案比较与选择
+
+| 方案 | 改动面 | 对其他作业的影响 | 结论 |
+| --- | --- | --- | --- |
+| 升级 gradio 到 4.x | 全局环境 | 影响全部 5 个作业的组件行为 | ✗ 不采用 |
+| 改写 `UI.py` 的 hw3 组件写法 | 篡改模板文件 | 破坏"模板基线可回溯" | ✗ 不采用 |
+| **新增 `gradio_compat.py` + `web_demo.py` 顶部 2 行** | 1 个新文件 + 入口 2 行 | hw1/hw2/hw4/hw5 零影响 | ✓ 采用 |
+
+**基线保真的硬证据**：`git diff main -- UI.py` **无任何差异**（`functions.py` 的差异全部来自
+阶段 F 的作业1 修复，属已批准范围）。
+
+### G3 · 实现（`gradio_compat.py`）
+
+- 3.36.1 的 `gr.Image(tool="sketch", source="upload", type="numpy")` 的 `preprocess` 恰好返回
+  `{"image": …, "mask": …}`（见 `gradio/components/image.py:271-276`），是最贴近 4.x 的落点。
+- `ImageEditor` = 上述 `gr.Image` 的子类，`preprocess` 返回 **4.x 风格字典**
+  `{"background": …, "layers": [mask], "composite": …}`；
+  因此 `UI.py` 的 `reset_points`（`bg_img["background"]`）与 `functions.py` 的 `function_hw3`
+  （`bg_image["background"]`、`bg_image["layers"][0][:, :, 0]`）**一行都不用改**。
+- `Brush` 的最小替身：`default_size` → 3.x 的 `brush_radius`；`colors[0]` → composite 的填充色。
+- `install()` 幂等且可退化：gradio ≥ 4 时返回 False、不做任何事（将来升级无需删代码）。
+- 能力差异如实写入 `gradio_compat.LIMITATIONS` 并在测试中断言：
+  ①无真图层（`layers` 恒为长度 1 的列表）；②画笔颜色固定（`colors`/`color_mode` 被忽略）；
+  ③橡皮无法禁用（`eraser=False` 被忽略）；④`composite` 是按 mask 填画笔色的近似值。
+
+### G4 · 测试与实测结果（本轮实际输出）
+
+| 项目 | 命令 | 结果 |
+| --- | --- | --- |
+| 兼容层单元测试 | `python tests/test_gradio_compat.py` | **19/19 PASS**（1.080 s） |
+| 作业1 数组层回归 | `python tests/test_hw1.py` | **46/46 PASS**（0.093 s） |
+| 作业1 单页界面冒烟 | `python tests/ui_smoke_hw1.py` | **5/5 PASS**（阶段 F 记录） |
+| **完整程序启动冒烟** | `python tests/ui_smoke_web_demo.py --port 8090` | **10/10 PASS** |
+
+兼容层测试覆盖：安装幂等 / 不覆盖官方 API、`source` 收敛规则、`Brush.default_size → brush_radius`、
+`preprocess` 的 4.x 契约（background 逐像素回环、`layers[0][:, :, 0]` 与输入 mask 完全一致）、
+**把 shim 输出直接喂给模板 `function_hw3` 并数出 4 个连通域**、`postprocess` 接受 numpy 与字典、
+`UI.py` 五个界面与 `web_demo.main()`（mock 掉 `launch`）均可构建。
+
+完整程序冒烟输出（8088 被用户手动启动的 hw1 单页服务占用，故用 8090）：
+
+```
+启动方式：python -c <bootstrap>（调用真实 web_demo.main()，端口 8090）
+[PASS] web_demo.py 进程存活
+[PASS] GET / 返回 200 -> status=200
+[PASS] 页面含 5 个作业文案 -> 71435 bytes
+[PASS] 页签存在：作业1 / 作业2 / 作业3 / 作业4 / 作业5（5 项）
+[PASS] 作业3 编辑器退化为 sketch 工具 -> tools=['editor', 'sketch']
+[PASS] /config 状态 200
+UI smoke (full app): 10/10 PASS
+```
+
+- 端口 8088 走**原生** `python web_demo.py`（与手动运行完全一致）；
+  本次因端口占用改走 `--port 8090`（仅替换 `server_port`，仍调用真实 `web_demo.main()`）。
+- **仍未完成**：用户在浏览器中人工确认完整页面 5 个页签（尤其作业3 的画笔/清空交互）。
+  自动化只能证明"能启动 + 页签与编辑器类型正确"，不能替代视觉与交互验证。
+
+### G5 · 提交明细
+
+- `feat: add gradio 3.x compatibility shim for the template UI`（`gradio_compat.py`）
+- `chore: install gradio compatibility layer in the entry point`（`web_demo.py`）
+- `test: cover the compatibility layer and full-app startup`（`tests/`）
+- `docs: record stage G gradio compatibility fix`（`PROJECT_LOG.md`、`AGENTS.md`）
+
+### 下一步
+
+- 用户人工验证完整页面：`python web_demo.py` → <http://127.0.0.1:8088/>（先关闭占用该端口的服务）。
+- 通过后进入作业2 `function_hw2`。
