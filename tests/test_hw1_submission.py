@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -34,13 +35,39 @@ class TestSubmissionPackage(unittest.TestCase):
                     "submission/hw1/%s 与工作区版本不一致，请重新运行 "
                     "python tools/make_submission.py（或 ask AI 重新生成）" % name)
 
-    def test_report_pdf_is_present_and_identical(self):
-        pdf = SUBMISSION / "hw1_report.pdf"
-        self.assertTrue(pdf.is_file(), "提交包缺少报告 PDF")
-        self.assertEqual(
-            (ROOT / "reports" / "hw1" / "hw1_report.pdf").read_bytes(),
-            pdf.read_bytes(),
-            "提交包里的报告 PDF 与 reports/hw1/hw1_report.pdf 不一致")
+    def test_report_pdf_is_present_and_valid(self):
+        """报告 PDF：至少一份、格式有效、未加密、页数 >= 3。
+
+        提交包里的报告由外部排版提供（文件名可能变化），因此这里校验
+        “有效性”，而不是与 reports/hw1/hw1_report.pdf 逐字节相等。
+        """
+        pdfs = sorted(SUBMISSION.glob("*.pdf"))
+        self.assertTrue(pdfs, "提交包缺少报告 PDF")
+        for pdf in pdfs:
+            with self.subTest(pdf=pdf.name):
+                raw = pdf.read_bytes()
+                self.assertTrue(raw.startswith(b"%PDF-"), "%s 不是有效 PDF" % pdf.name)
+                self.assertIn(b"%%EOF", raw[-4096:], "%s 缺少 %%EOF 结束标记" % pdf.name)
+                self.assertNotIn(b"/Encrypt", raw, "%s 是加密 PDF" % pdf.name)
+                pages = len(re.findall(rb"/Type\s*/Page[^s]", raw))
+                self.assertGreaterEqual(pages, 3, "%s 页数过少（%d）" % (pdf.name, pages))
+
+    def test_readme_file_list_matches_directory(self):
+        """README 清单里用反引号列出的文件名必须真实存在（清单与目录不得打架）。
+
+        只认“不含空白与路径分隔符”的反引号 token：README 里也有
+        ``pip install -r requirements.txt``、``python web_demo.py`` 这类**命令行**，
+        它们不是文件名，若一并纳入校验会误报。
+        """
+        text = (SUBMISSION / "README.md").read_text(encoding="utf-8")
+        listed = set(re.findall(r"`([^`\s/]+?\.(?:py|pdf|md|txt))`", text))
+        self.assertTrue(listed, "未能从 README 解析出任何文件名：断言正则可能已失效")
+        missing = sorted(name for name in listed if not (SUBMISSION / name).is_file())
+        self.assertEqual(missing, [],
+                         "README 列出、但提交包中不存在的文件：%s" % missing)
+        for name in REQUIRED:
+            with self.subTest(name=name):
+                self.assertIn(name, listed, "README 文件清单未列出 %s" % name)
 
     def test_no_extra_python_files(self):
         extra = sorted(p.name for p in SUBMISSION.glob("*.py") if p.name not in REQUIRED)

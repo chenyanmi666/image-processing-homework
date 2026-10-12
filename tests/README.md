@@ -103,8 +103,11 @@ python tests/test_hw1_submission.py      # 守卫测试：提交包与工作区�
 老师要求的提交物是 3 个 Python 文件（`functions.py`、`UI.py`、`web_demo.py`）+ 报告 PDF，
 但 `web_demo.py` 顶部 `import gradio_compat` 决定了 **`gradio_compat.py` 也是必需文件**：
 只交 3 个文件会在启动时 `ModuleNotFoundError`。因此正式提交清单为
-`functions.py` + `UI.py` + `web_demo.py` + `gradio_compat.py` + `hw1_report.pdf`
+`functions.py` + `UI.py` + `web_demo.py` + `gradio_compat.py` + 报告 PDF
 （另附 `README.md`、`requirements.txt`），见 `submission/hw1/`。
+提交包内的报告为外部排版版 `图像处理作业1_新版实验报告_陈彦米.pdf`（6 页）；
+仓库内由 `reports/hw1/make_report.py` 自动生成的 `hw1_report.pdf`（9 页）**不**放入提交包，
+避免两份报告混淆。文件清单以 `submission/hw1/` 实际内容为准，并由 `tests/test_hw1_submission.py` 校验。
 `web_demo.py` 里的 `gr.Blocks(css='style.css')` 传入的是字符串（gradio 将它当内联 CSS），
 仓库中并无 `style.css`，不影响运行，故提交包不含该文件。
 

@@ -22,14 +22,20 @@ for name in FILES:
         assert a.read() == b.read(), name
     print("复制(逐字节一致) %-18s %6d bytes" % (name, os.path.getsize(dst)))
 
-pdf_src = os.path.join(ROOT, "reports", "hw1", "hw1_report.pdf")
-pdf_dst = os.path.join(DST, "hw1_report.pdf")
-shutil.copyfile(pdf_src, pdf_dst)
-print("复制报告 PDF       %6d bytes" % os.path.getsize(pdf_dst))
+# 报告 PDF：提交包里的报告由外部排版提供，本脚本只校验、不覆盖，
+# 避免重新运行时把报告换回 reports/hw1/hw1_report.pdf。
+REPORT_NAME = "图像处理作业1_新版实验报告_陈彦米.pdf"
+report = os.path.join(DST, REPORT_NAME)
+if os.path.isfile(report):
+    with open(report, "rb") as fh:
+        assert fh.read(5) == b"%PDF-", "提交包报告不是有效 PDF：" + REPORT_NAME
+    print("校验报告 PDF       %6d bytes" % os.path.getsize(report))
+else:
+    print("警告：提交包缺少报告 %s（请手动放入；脚本不会用自动生成的 PDF 覆盖）" % REPORT_NAME)
 
 README = """# 作业1 提交包（图像色相/饱和度/亮度/对比度调整工具）
 
-学号：2400013156
+学号：2400013156 姓名：陈彦米
 
 本目录是**最小可运行提交集**：老师要求的 3 个 Python 文件 + 1 个必需的兼容层 +
 报告 PDF。所有 .py 文件都与仓库最终工作版本**逐字节一致**（无删改）。
@@ -42,8 +48,13 @@ README = """# 作业1 提交包（图像色相/饱和度/亮度/对比度调整�
 | `UI.py` | Gradio 界面与事件绑定（`create_demo_hw1` ~ `create_demo_hw5`） | 必需（老师要求） |
 | `web_demo.py` | 启动入口（含学号展示），`python web_demo.py` 即启动 | 必需（老师要求） |
 | `gradio_compat.py` | gradio 3.x/4.x 兼容层：只为 4.x 组件（`ImageEditor`/`Brush`）提供等价语义 | **必需**：`web_demo.py` 第 6 行 `import gradio_compat`，缺它无法启动 |
-| `hw1_report.pdf` | 作业报告（含算法、实验、界面证据与局限） | 必需（老师要求） |
+| `图像处理作业1_新版实验报告_陈彦米.pdf` | 作业报告，6 页（算法与边界处理、对比实验与量化结果、两项进阶功能、运行截图与局限） | 必需（老师要求） |
 | `requirements.txt` | 依赖清单 | 便于复现 |
+
+> 本包报告文件为 `图像处理作业1_新版实验报告_陈彦米.pdf`（6 页，封面含学号 2400013156）；
+> 其关键数值与仓库 `reports/hw1/metrics.md` 一致。
+> 仓库内 `reports/hw1/hw1_report.pdf`（9 页）是 `reports/hw1/make_report.py` 自动生成的材料，
+> **未**放入本提交包，避免两份报告混淆。
 
 ## 2. 依赖
 
