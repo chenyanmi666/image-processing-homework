@@ -60,6 +60,18 @@ class ImageEditor(gr.Image):
     _VALID_SOURCES = ("upload", "webcam", "canvas")
     _DEFAULT_COLOR = (255, 0, 0)
 
+    @classmethod
+    def get_block_name(cls):
+        """**关键**：向 gradio 声明本组件应作为内置 `image` 渲染。
+
+        gradio 3.x 用类名推导前端组件名（`camelcase_to_snakecase(cls.__name__)`）。
+        若不覆盖本方法，子类名 `ImageEditor` 会让 `/config` 里出现
+        `type: "imageeditor"`，而前端 `component_map` 中并无该名字 ——
+        后果是前端渲染报错、**整页停在 Loading**（HTTP 200 与 /config 正常都掩盖不了）。
+        因此这里显式返回 `image`，实际行为仍是 3.x 的 sketch 编辑器（画笔 + 橡皮）。
+        """
+        return "image"
+
     def __init__(
         self,
         value=None,
