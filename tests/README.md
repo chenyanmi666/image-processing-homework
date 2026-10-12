@@ -60,3 +60,16 @@ python tests/ui_smoke_hw1.py --serve    # 只启动服务，供人工在浏览�
 该兼容性问题的结论与待决策项见 `PROJECT_LOG.md` 阶段 F。
 
 仓库根目录另提供双击启动脚本 `start_hw1_demo.bat`（等价于 `python tests/ui_smoke_hw1.py --serve`）。
+
+## gradio 版本兼容层
+
+`gradio_compat.py`（仓库根目录）为 gradio 3.x 补上模板 `UI.py` 用到的 4.x 组件
+（`gr.ImageEditor` / `gr.Brush`），由 `web_demo.py` 顶部调用一次；
+`UI.py` 与 `functions.py` **保持字节级原样**（`git diff main -- UI.py` 为空）。
+
+- 单元测试：`python tests/test_gradio_compat.py`
+  （安装幂等性 / 不覆盖官方 API、4.x 输入契约、模板 `function_hw3` 的取心逻辑在 3.x 下仍成立、
+  `UI.py` 五个界面与 `web_demo.main()` 均可构建）
+- 全量程序冒烟：`python tests/ui_smoke_web_demo.py`
+  （子进程启动 `web_demo.py` → `GET /` 200 → `GET /config` 校验 5 个作业页签 → 关闭）
+- gradio ≥ 4 时 `install()` 自动让位给官方实现，不做任何事。
