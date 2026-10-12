@@ -73,3 +73,31 @@ python tests/ui_smoke_hw1.py --serve    # 只启动服务，供人工在浏览�
 - 全量程序冒烟：`python tests/ui_smoke_web_demo.py`
   （子进程启动 `web_demo.py` → `GET /` 200 → `GET /config` 校验 5 个作业页签 → 关闭）
 - gradio ≥ 4 时 `install()` 自动让位给官方实现，不做任何事。
+
+## 前端真实渲染测试（完整程序）
+
+```
+python tests/test_frontend_render.py            # 默认端口 8091（避开手动服务 8088）
+python tests/test_frontend_render.py --port 8092
+```
+
+**为什么需要它**：`GET /` 返回 200、`/config` 内容正确，**都不等于浏览器完成了渲染**。
+阶段 H 的实例：兼容层子类名让 `/config` 出现 `type: "imageeditor"`（gradio 3.x 前端
+`component_map` 里只有 `image`）→ 前端渲染中断、整页停在 `Loading...`，
+而服务端日志与 HTTP 状态全部正常。**只有真正执行页面 JS 才能发现这类问题。**
+
+本脚本会：
+
+1. 以子进程启动真实 `web_demo.main()`（与 `ui_smoke_web_demo.py` 相同的启动方式）；
+2. 用本机 Edge/Chrome 的 **headless 模式**（`--headless=new --dump-dom`）抓取
+   **执行 JS 之后**的 DOM；
+3. **剥离内嵌 `window.gradio_config` 后**，断言 5 个作业页签文案确实渲染出来、
+   且不存在 `Loading...` 遮罩、组件节点（`data-testid="image"`、`component-N`）已生成；
+4. 断言 `/config` 中所有带 `tool` 的组件 `type` 均为 `image`（防止再退回前端不认识的名字）。
+
+注意事项：
+
+- 本机无 Edge/Chrome 时输出 **SKIP** 而不是失败，并提示改由人工在浏览器验收。
+- Edge ≥ 132 / Chrome ≥ 132 已移除 old headless，**必须**用 `--headless=new`，
+  否则 `--dump-dom` 无输出（阶段 H 踩过）。
+- 该脚本不参与 `unittest discover`（无 `TestCase`），不拖慢数组层测试。
