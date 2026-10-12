@@ -58,3 +58,5 @@ python tests/ui_smoke_hw1.py --serve    # 只启动服务，供人工在浏览�
 
 本脚本**不修改** `UI.py` / `web_demo.py`，只是为作业1 单独构建页面以便实测；
 该兼容性问题的结论与待决策项见 `PROJECT_LOG.md` 阶段 F。
+
+仓库根目录另提供双击启动脚本 `start_hw1_demo.bat`（等价于 `python tests/ui_smoke_hw1.py --serve`）。
