@@ -13,8 +13,8 @@
 | 当前分支 | `feat/image-processing-assignment` |
 | 基线 | `main` = `6dcd9f9148c476f32d2e0af07a3aa6b7ba2bce5f`，tag `template-baseline` |
 | 远程 | `origin` = 上方私有仓库；`main` / 功能分支 / tag 均已推送 |
-| 当前进度 | 基础设施（阶段 A–D）已完成，进入作业1 `function_hw1` 开发 |
-| 学号 | `2400013156`（尚未写入 `web_demo.py`，仍为占位 `2400000000`） |
+| 当前进度 | 阶段 A–F 已完成；作业1 已实现，数组层 46/46 PASS、界面层 API 实测通过，待人工浏览器实测 |
+| 学号 | `2400013156`（已写入 `web_demo.py` 第 17 行） |
 
 ---
 
@@ -204,3 +204,107 @@
 - 是否处理 gradio/Gr.Error 兼容问题。
 - 进入作业2 `function_hw2`（此前需先确认作业1 界面实测通过）。
 
+---
+
+## 阶段 F · 作业1 加固修复与界面层实测（2026-10-12）
+
+**触发**：外部 Reviewer（ChatGPT，经 GitHub 连接器）审查 commit `ac9ee1b` 与本日志后，
+认可算法与接口方向，但**暂不最终验收、暂不进入作业2**，要求先完成 8 项加固（本节逐项记录）。
+
+### F1 · HSI 逆变换改为分段局部计算（`_hw1_hsi_to_rgb`）
+
+- **旧写法**：对全图套用三段公式后用 `np.where` 选择 → 无效分段也会被计算。
+  例：H=210 属第 2 段，旧实现同时计算第 3 段的 `H' = 210-240 = -30`，
+  分母 `cos(60-(-30)) = cos(90°) ≈ 6.1e-17` → 中间量量级 1e16（结果虽被 `np.where` 丢弃，仍属数值不稳定）。
+- **新写法**：布尔掩码索引，`if seg1.any(): ...` 只对命中分段的像素求值。
+- **等价性证据**：720 个色相 × 循环 (S,I) 组合下，与旧实现 `np.array_equal` **位级一致**。
+- **"只算命中段"的证据**：用 `np.cos` 探针拦截全部 cos 调用，断言被求值角度均落在 `[0,120)`；
+  旧实现会立即失败（会看到 210、-30 等越界角度）。
+
+### F2 · `_hw1_as_float_rgb` 输入校验
+
+- `None`、无法转数组、1 维/4 维、通道数 2 或 5、非数值 dtype（str/object）、空尺寸
+  → 一律抛 `ValueError`，消息中带**实际 shape/dtype**（不再出现难以定位的索引异常）。
+- 正确接受：2D 灰度、`(H,W,1)`、`(H,W,4)`（丢弃 alpha）、bool、`[0,1]` 浮点、0-255 浮点。
+
+### F3 · `mode` 显式分支
+
+- 改为 `if / elif / else`：未知模式与 `None` 均抛 `gr.Error("不支持的模式：...")`，
+  不再静默落入亮度/对比度分支。
+
+### F4 · gradio 3.36.1 `gr.Error(duration=5)` 兼容（最小修改）
+
+- **方案**：`functions.py` 顶部新增模块级兼容层 `_GradioCompat`，只接管 `Error` 构造
+  （支持 `duration` 的版本原样透传，不支持的退化为单参数构造），其余属性转发真实 gradio。
+- **边界**：`function_hw2` ~ `function_hw5` 业务代码**零改动**（符合 AGENTS §5）；
+  未修改 gradio 模块本身；`UI.py` / `web_demo.py` 里的 `gr` 不受影响；未升级环境。
+
+### F5 · 测试脚本入库
+
+- 新增 `tests/test_hw1.py`（`unittest` 驱动，仅依赖 numpy）与 `tests/README.md`（执行说明 + 覆盖表）。
+  执行方式：`python tests/test_hw1.py` 或 `python -m unittest discover -s tests -v`。
+
+### F6 · 学号写入
+
+- `web_demo.py` 第 17 行 `2400000000` → `2400013156`；采用**字节级替换**，
+  实测纯 CRLF、无 BOM、文件长度不变（两串同为 10 字符）。
+
+### F7 · 数组层回归结果（本轮实测）
+
+`python tests/test_hw1.py` → **46/46 PASS，0 failures，0 errors，用时 0.09–0.12 s**
+
+| 测试类 | 数量 | 覆盖 |
+| --- | --- | --- |
+| `TestContract` | 3 | 7 路输出、形状/dtype、通道分解图与结果图一致 |
+| `TestIdentity` | 2 | 默认滑块两种模式逐像素复制原图（`max|d|=0`） |
+| `TestHueSaturation` | 10 | 浮点/uint8 往返、色相锚点、周期性、饱和度单调、明度乘性 |
+| `TestBrightnessContrast` | 4 | 亮度线性、对比度 -1 → 128 灰、先对比度后亮度 |
+| `TestInverseSegments` | 8 | 与旧实现位级一致、cos 探针、全域无 `RuntimeWarning`、边界色相、越界取模 |
+| `TestInputValidation` | 14 | 非法/合法输入形态全覆盖 |
+| `TestModeBranch` | 4 | 未知模式抛错、亮度模式忽略色相滑块 |
+| `TestEdgeAndPerformance` | 3 | 极端图像、单像素、512×512（实测 0.079–0.097 s） |
+
+**测试自身纠错（保留不删）**：首轮 3 个失败均为**测试写错**而非实现缺陷——
+① 误把单通道分解图当 3 维；② 误把 ±90° 当周期等价（应为 ±180°）；
+③ 明度乘性测试用了高饱和色，放大后触及 RGB 边界被裁剪（改用低饱和色后精确 `1.5000`）。
+
+### F8 · 界面层实测（关键发现）
+
+**发现 1：完整 `web_demo.py` 在本机无法启动（原模板既存问题，非本次改动引入）**
+
+- 报错：`AttributeError: module 'gradio' has no attribute 'ImageEditor'`
+  —— `UI.py:85` 的 `create_demo_hw3` 使用 `gr.ImageEditor`，该组件为 **gradio 4.x** 才有。
+- 影响：本机 gradio 3.36.1 下 `python web_demo.py` **启动即退出（rc=1）**，任何页面都打不开。
+- 处置：**未修改 `UI.py`**（AGENTS §5 禁止擅自改动）；改为对 **hw1 单独注册界面** 做实测，
+  脚本入库为 `tests/ui_smoke_hw1.py`（`--serve` 供人工测试，默认自动冒烟）。
+
+**发现 2：hw1 界面层端到端验证通过**
+
+- 方式：启动仅含 hw1 的 Gradio 服务，用原生 `POST /run/predict` 真实走
+  「组件序列化 → `function_hw1` → 反序列化」全链路（输入 32×32 纯红 `[255,0,0]`）：
+
+| 调用 | 返回 |
+| --- | --- |
+| 页面 `GET /` | HTTP 200，33902 字节，含"作业一""色相/饱和度""亮度/对比度" |
+| 色相/饱和度 默认参数 | 7 个输出，`[255,0,0]`（逐像素恒等） |
+| 亮度/对比度 `b=0.5` | `[255,128,128]` |
+| 色相 `h=1.0`（+180°） | `[0,128,128]`（青） |
+| 饱和度 `s=-1.0` | `[85,85,85]`（I=1/3 → 85） |
+| R 通道分解图 | `[85,85,85]`，与结果图一致 |
+
+- `gradio_client` 与本机 gradio 版本不匹配（422 / `KeyError: 'data'`）无法使用 → 已改用原生 HTTP 端点。
+- **仍未完成**：人工在浏览器中拖动滑块观察实时联动（数组层与 API 层通过**不等于**视觉/交互通过）。
+
+### F9 · 提交明细
+
+- `fix: harden function_hw1 ...`（`functions.py`）
+- `test: add reusable array-level test suite and UI smoke script`（`tests/`）
+- `chore: fill in student id in web_demo.py`（`web_demo.py`）
+- `docs: record stage F fixes, regressions and UI smoke results`（`PROJECT_LOG.md`、`AGENTS.md`）
+
+### 下一步
+
+- 用户人工实测 hw1 页面：`python tests/ui_smoke_hw1.py --serve` → 浏览器打开 <http://127.0.0.1:8088/>。
+- 通过后再进入作业2 `function_hw2`。
+- **待用户决策**：完整 `web_demo.py` 的 gradio 版本问题
+  （升级 gradio 4.x / 本地临时替换 hw3 组件 / 保持现状只做单页实测）。
