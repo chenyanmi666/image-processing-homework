@@ -6,18 +6,30 @@ import pathlib
 import gradio as gr
 import numpy as np
 
-def create_demo_hw1(process):
+def create_demo_hw1(process, process_compare=None):
+    """作业1界面：五种调整模式，可选手写与 OpenCV 对比实验。"""
     with gr.Blocks() as demo:
         gr.Markdown("## 作业一: 图像色相/饱和度/亮度/对比度调整工具")
+        gr.Markdown("说明：手写路径按课件 p72-p78 的 HSL(HSI) 定义"
+                    "（亮度 L=(R+G+B)/3）；官方路径直接调用 cv2.COLOR_BGR2HLS"
+                    "（亮度 L=(max+min)/2）。两者不是同一个数学模型，可用【对比实验】按钮查看差异。")
+        gr.Markdown("进阶功能说明：【亮度/对比度 (PS风格)】与【自然饱和度 (PS vibrance)】均为本作业"
+                    "**自行设计**的模拟 / 近似算法，未使用真实 Photoshop 输出数据拟合，"
+                    "也未与 Photoshop 实际输出做过逐像素比对。")
         with gr.Row():
             with gr.Column():
                 input_image = gr.Image(sources=['upload', 'webcam', 'clipboard'], type='numpy', label='输入图像')
-                mode = gr.Radio(["色相/饱和度", "亮度/对比度"], label="模式", value="色相/饱和度")
+                mode = gr.Radio(["色相/饱和度", "色相/饱和度 (官方cv2 HLS)", "自然饱和度 (PS vibrance)",
+                                 "亮度/对比度", "亮度/对比度 (PS风格)"],
+                                label="模式（前三项用色相/饱和度/明度滑杆，后两项用亮度/对比度滑杆）",
+                                value="色相/饱和度")
                 h_slider = gr.Slider(minimum=-1, maximum=1, label="色相", value=0, step=0.01)
                 s_slider = gr.Slider(minimum=-1, maximum=1, label="饱和度", value=0, step=0.01)
                 l_slider = gr.Slider(minimum=-1, maximum=1, label="明度", value=0, step=0.01)
                 brightness = gr.Slider(minimum=-1, maximum=1, label="亮度", value=0, step=0.01, visible=False)
                 contrast = gr.Slider(minimum=-1, maximum=1, label="对比度", value=0, step=0.01, visible=False)
+                if process_compare is not None:
+                    compare_button = gr.Button(value="进阶①：手写 HSL vs 官方 cv2 HLS 对比实验")
             with gr.Column():
                 with gr.Row():
                     output_image = gr.Image(type='numpy', label='输出图像', interactive=False)
@@ -29,23 +41,37 @@ def create_demo_hw1(process):
                     h_channel = gr.Image(type='numpy', label='H通道', interactive=False)
                     s_channel = gr.Image(type='numpy', label='S通道', interactive=False)
                     l_channel = gr.Image(type='numpy', label='L通道', interactive=False)
+                if process_compare is not None:
+                    compare_image = gr.Image(type='numpy', interactive=False,
+                                             label='对比图：原图 | 手写(课件定义) | 官方cv2 HLS | 差异×5')
+                    compare_text = gr.Markdown()
 
         input_image.change(fn=process, 
                            inputs=[input_image, mode, h_slider, s_slider, l_slider, brightness, contrast], 
                            outputs=[output_image, r_channel, g_channel, b_channel, h_channel, s_channel, l_channel])
 
         def update_mode(mode):
-            if mode == "色相/饱和度":
+            """按模式显示对应滑杆；自然饱和度模式下"饱和度"滑杆即自然饱和度强度。"""
+            if mode == "自然饱和度 (PS vibrance)":
                 return (
-                    gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), 
+                    gr.update(visible=False), gr.update(visible=True, label="自然饱和度"), gr.update(visible=False),
                     gr.update(visible=False), gr.update(visible=False)
                 )
-            else:
+            if mode in ("亮度/对比度", "亮度/对比度 (PS风格)"):
                 return (
-                    gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
+                    gr.update(visible=False), gr.update(visible=False, label="饱和度"), gr.update(visible=False),
                     gr.update(visible=True), gr.update(visible=True)
                 )
+            return (
+                gr.update(visible=True), gr.update(visible=True, label="饱和度"), gr.update(visible=True),
+                gr.update(visible=False), gr.update(visible=False)
+            )
         mode.change(update_mode, inputs=[mode], outputs=[h_slider, s_slider, l_slider, brightness, contrast])
+
+        if process_compare is not None:
+            compare_button.click(fn=process_compare,
+                                 inputs=[input_image, h_slider, s_slider, l_slider],
+                                 outputs=[compare_image, compare_text])
 
         def slider_update(slider):
             return slider.release(
