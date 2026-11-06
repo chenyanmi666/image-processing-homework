@@ -1,0 +1,6 @@
+# Tested integrated HW1 + HW2 + HW3 demo, Python 3.9.
+numpy==1.24.3
+gradio==3.44.0
+gradio_client==0.5.0
+Pillow==11.3.0
+opencv-python==4.10.0.84
